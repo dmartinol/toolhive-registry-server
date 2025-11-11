@@ -3,7 +3,7 @@ package sources
 import (
 	"testing"
 
-	"github.com/stacklok/toolhive/pkg/registry"
+	regtypes "github.com/stacklok/toolhive/pkg/registry/types"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/stacklok/toolhive-registry-server/pkg/config"
@@ -14,39 +14,39 @@ func TestNewFetchResult(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		registryData *registry.Registry
+		registryData *regtypes.Registry
 		hash         string
 		format       string
 	}{
 		{
 			name: "empty registry",
-			registryData: &registry.Registry{
+			registryData: &regtypes.Registry{
 				Version:       "1.0.0",
-				Servers:       make(map[string]*registry.ImageMetadata),
-				RemoteServers: make(map[string]*registry.RemoteServerMetadata),
+				Servers:       make(map[string]*regtypes.ImageMetadata),
+				RemoteServers: make(map[string]*regtypes.RemoteServerMetadata),
 			},
 			hash:   "abcd1234",
 			format: config.SourceFormatToolHive,
 		},
 		{
 			name: "registry with servers",
-			registryData: &registry.Registry{
+			registryData: &regtypes.Registry{
 				Version: "1.0.0",
-				Servers: map[string]*registry.ImageMetadata{
+				Servers: map[string]*regtypes.ImageMetadata{
 					"server1": {},
 					"server2": {},
 				},
-				RemoteServers: make(map[string]*registry.RemoteServerMetadata),
+				RemoteServers: make(map[string]*regtypes.RemoteServerMetadata),
 			},
 			hash:   "efgh5678",
 			format: config.SourceFormatToolHive,
 		},
 		{
 			name: "registry with remote servers",
-			registryData: &registry.Registry{
+			registryData: &regtypes.Registry{
 				Version: "1.0.0",
-				Servers: make(map[string]*registry.ImageMetadata),
-				RemoteServers: map[string]*registry.RemoteServerMetadata{
+				Servers: make(map[string]*regtypes.ImageMetadata),
+				RemoteServers: map[string]*regtypes.RemoteServerMetadata{
 					"remote1": {},
 				},
 			},
@@ -73,16 +73,16 @@ func TestNewFetchResult(t *testing.T) {
 func TestFetchResultHashConsistency(t *testing.T) {
 	t.Parallel()
 
-	registryData := &registry.Registry{
+	registryData := &regtypes.Registry{
 		Version: "1.0.0",
-		Servers: map[string]*registry.ImageMetadata{
+		Servers: map[string]*regtypes.ImageMetadata{
 			"server1": {},
 			"server2": {},
 			"server3": {},
 			"server4": {},
 			"server5": {},
 		},
-		RemoteServers: make(map[string]*registry.RemoteServerMetadata),
+		RemoteServers: make(map[string]*regtypes.RemoteServerMetadata),
 	}
 	hash := "consistent-hash-value"
 	format := config.SourceFormatToolHive
@@ -100,20 +100,20 @@ func TestFetchResultHashConsistency(t *testing.T) {
 func TestFetchResultHashDifference(t *testing.T) {
 	t.Parallel()
 
-	registryData1 := &registry.Registry{
+	registryData1 := &regtypes.Registry{
 		Version: "1.0.0",
-		Servers: map[string]*registry.ImageMetadata{
+		Servers: map[string]*regtypes.ImageMetadata{
 			"server1": {},
 		},
-		RemoteServers: make(map[string]*registry.RemoteServerMetadata),
+		RemoteServers: make(map[string]*regtypes.RemoteServerMetadata),
 	}
 
-	registryData2 := &registry.Registry{
+	registryData2 := &regtypes.Registry{
 		Version: "1.0.0",
-		Servers: map[string]*registry.ImageMetadata{
+		Servers: map[string]*regtypes.ImageMetadata{
 			"server2": {},
 		},
-		RemoteServers: make(map[string]*registry.RemoteServerMetadata),
+		RemoteServers: make(map[string]*regtypes.RemoteServerMetadata),
 	}
 
 	hash1 := "hash-for-data1"

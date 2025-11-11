@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/stacklok/toolhive/pkg/registry"
+	regtypes "github.com/stacklok/toolhive/pkg/registry/types"
 
 	"github.com/stacklok/toolhive-registry-server/pkg/config"
 	"github.com/stacklok/toolhive-registry-server/pkg/sources"
@@ -34,7 +34,7 @@ func NewFileRegistryDataProvider(storageManager sources.StorageManager, cfg *con
 // GetRegistryData implements RegistryDataProvider.GetRegistryData.
 // It delegates to the StorageManager to retrieve and parse registry data.
 // This eliminates code duplication and provides a single source of truth for file operations.
-func (p *FileRegistryDataProvider) GetRegistryData(ctx context.Context) (*registry.Registry, error) {
+func (p *FileRegistryDataProvider) GetRegistryData(ctx context.Context) (*regtypes.Registry, error) {
 	// Delegate to storage manager - all file reading logic is centralized there
 	return p.storageManager.Get(ctx, p.config)
 }

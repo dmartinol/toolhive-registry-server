@@ -4,7 +4,7 @@ package service
 import (
 	"context"
 
-	"github.com/stacklok/toolhive/pkg/registry"
+	regtypes "github.com/stacklok/toolhive/pkg/registry/types"
 )
 
 //go:generate mockgen -destination=mocks/mock_provider.go -package=mocks -source=provider.go RegistryDataProvider,DeploymentProvider
@@ -15,7 +15,7 @@ import (
 type RegistryDataProvider interface {
 	// GetRegistryData fetches the current registry data.
 	// Returns the registry data and any error encountered.
-	GetRegistryData(ctx context.Context) (*registry.Registry, error)
+	GetRegistryData(ctx context.Context) (*regtypes.Registry, error)
 
 	// GetSource returns a descriptive string about where the registry data comes from.
 	// Examples: "file:/path/to/registry.json", "remote:https://example.com/registry"

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stacklok/toolhive/pkg/registry"
+	regtypes "github.com/stacklok/toolhive/pkg/registry/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,10 +20,10 @@ func TestFileStorageManager_StoreAndGet(t *testing.T) {
 	require.NotNil(t, manager)
 
 	// Create a test registry
-	testRegistry := &registry.Registry{
+	testRegistry := &regtypes.Registry{
 		Version:     "1.0.0",
 		LastUpdated: "2024-01-01T00:00:00Z",
-		Servers:     make(map[string]*registry.ImageMetadata),
+		Servers:     make(map[string]*regtypes.ImageMetadata),
 	}
 
 	// Store the registry
@@ -54,7 +54,7 @@ func TestFileStorageManager_Delete(t *testing.T) {
 	require.NotNil(t, manager)
 
 	// Create and store a test registry
-	testRegistry := &registry.Registry{
+	testRegistry := &regtypes.Registry{
 		Version: "1.0.0",
 	}
 
@@ -94,7 +94,7 @@ func TestFileStorageManager_Delete_PermissionDenied(t *testing.T) {
 	manager := NewFileStorageManager(tmpDir)
 
 	// Create and store a file
-	testRegistry := &registry.Registry{Version: "1.0.0"}
+	testRegistry := &regtypes.Registry{Version: "1.0.0"}
 	ctx := context.Background()
 	err := manager.Store(ctx, nil, testRegistry)
 	require.NoError(t, err)

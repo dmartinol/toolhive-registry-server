@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stacklok/toolhive/pkg/registry"
+	regtypes "github.com/stacklok/toolhive/pkg/registry/types"
 
 	"github.com/stacklok/toolhive-registry-server/pkg/config"
 )
@@ -13,7 +14,7 @@ import (
 // TestRegistryBuilder provides a fluent interface for building test registry data
 type TestRegistryBuilder struct {
 	format        string
-	registry      *registry.Registry
+	registry      *regtypes.Registry
 	upstreamData  []registry.UpstreamServerDetail
 	serverCounter int
 }
@@ -27,11 +28,11 @@ func NewTestRegistryBuilder(format string) *TestRegistryBuilder {
 
 	switch format {
 	case config.SourceFormatToolHive, "":
-		builder.registry = &registry.Registry{
+		builder.registry = &regtypes.Registry{
 			Version:       "1.0.0",
 			LastUpdated:   time.Now().Format(time.RFC3339),
-			Servers:       make(map[string]*registry.ImageMetadata),
-			RemoteServers: make(map[string]*registry.RemoteServerMetadata),
+			Servers:       make(map[string]*regtypes.ImageMetadata),
+			RemoteServers: make(map[string]*regtypes.RemoteServerMetadata),
 		}
 	case config.SourceFormatUpstream:
 		builder.upstreamData = []registry.UpstreamServerDetail{}
@@ -49,8 +50,8 @@ func (b *TestRegistryBuilder) WithServer(name string) *TestRegistryBuilder {
 
 	switch b.format {
 	case config.SourceFormatToolHive, "":
-		b.registry.Servers[name] = &registry.ImageMetadata{
-			BaseServerMetadata: registry.BaseServerMetadata{
+		b.registry.Servers[name] = &regtypes.ImageMetadata{
+			BaseServerMetadata: regtypes.BaseServerMetadata{
 				Name:        name,
 				Description: fmt.Sprintf("Test server description for %s", name),
 				Tier:        "Community",
@@ -61,8 +62,8 @@ func (b *TestRegistryBuilder) WithServer(name string) *TestRegistryBuilder {
 			},
 			Image: "test/image:latest",
 		}
-		b.registry.Servers[name+"-legacy"] = &registry.ImageMetadata{
-			BaseServerMetadata: registry.BaseServerMetadata{
+		b.registry.Servers[name+"-legacy"] = &regtypes.ImageMetadata{
+			BaseServerMetadata: regtypes.BaseServerMetadata{
 				Name:        name + "-legacy",
 				Description: fmt.Sprintf("Test server description for %s", name),
 				Tier:        "Community",
@@ -118,8 +119,8 @@ func (b *TestRegistryBuilder) WithRemoteServer(url string) *TestRegistryBuilder 
 		url = fmt.Sprintf("https://remote-server-%d.example.com", b.serverCounter-1)
 	}
 
-	b.registry.RemoteServers[name] = &registry.RemoteServerMetadata{
-		BaseServerMetadata: registry.BaseServerMetadata{
+	b.registry.RemoteServers[name] = &regtypes.RemoteServerMetadata{
+		BaseServerMetadata: regtypes.BaseServerMetadata{
 			Name:        name,
 			Description: fmt.Sprintf("Test remote server description for %s", name),
 			Tier:        "Community",
@@ -148,8 +149,8 @@ func (b *TestRegistryBuilder) WithRemoteServerName(name, url string) *TestRegist
 		url = fmt.Sprintf("https://%s.example.com", name)
 	}
 
-	b.registry.RemoteServers[name] = &registry.RemoteServerMetadata{
-		BaseServerMetadata: registry.BaseServerMetadata{
+	b.registry.RemoteServers[name] = &regtypes.RemoteServerMetadata{
+		BaseServerMetadata: regtypes.BaseServerMetadata{
 			Name:        name,
 			Description: fmt.Sprintf("Test remote server description for %s", name),
 			Tier:        "Community",
@@ -184,8 +185,8 @@ func (b *TestRegistryBuilder) Empty() *TestRegistryBuilder {
 	switch b.format {
 	case config.SourceFormatToolHive, "":
 		// Keep the registry structure but clear servers
-		b.registry.Servers = make(map[string]*registry.ImageMetadata)
-		b.registry.RemoteServers = make(map[string]*registry.RemoteServerMetadata)
+		b.registry.Servers = make(map[string]*regtypes.ImageMetadata)
+		b.registry.RemoteServers = make(map[string]*regtypes.RemoteServerMetadata)
 	case config.SourceFormatUpstream:
 		b.upstreamData = []registry.UpstreamServerDetail{}
 	}
@@ -231,7 +232,7 @@ func (b *TestRegistryBuilder) BuildPrettyJSON() []byte {
 }
 
 // GetRegistry returns the built registry (for ToolHive format only)
-func (b *TestRegistryBuilder) GetRegistry() *registry.Registry {
+func (b *TestRegistryBuilder) GetRegistry() *regtypes.Registry {
 	if b.format == config.SourceFormatToolHive || b.format == "" {
 		return b.registry
 	}

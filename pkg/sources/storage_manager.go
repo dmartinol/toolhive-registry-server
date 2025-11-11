@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/stacklok/toolhive/pkg/registry"
+	regtypes "github.com/stacklok/toolhive/pkg/registry/types"
 
 	"github.com/stacklok/toolhive-registry-server/pkg/config"
 )
@@ -22,10 +22,10 @@ const (
 // StorageManager defines the interface for registry data persistence
 type StorageManager interface {
 	// Store saves a Registry instance to persistent storage
-	Store(ctx context.Context, cfg *config.Config, reg *registry.Registry) error
+	Store(ctx context.Context, cfg *config.Config, reg *regtypes.Registry) error
 
 	// Get retrieves and parses registry data from persistent storage
-	Get(ctx context.Context, cfg *config.Config) (*registry.Registry, error)
+	Get(ctx context.Context, cfg *config.Config) (*regtypes.Registry, error)
 
 	// Delete removes registry data from persistent storage
 	Delete(ctx context.Context, cfg *config.Config) error
@@ -44,7 +44,7 @@ func NewFileStorageManager(basePath string) StorageManager {
 }
 
 // Store saves the registry data to a JSON file
-func (f *FileStorageManager) Store(_ context.Context, _ *config.Config, reg *registry.Registry) error {
+func (f *FileStorageManager) Store(_ context.Context, _ *config.Config, reg *regtypes.Registry) error {
 	// Create base directory if it doesn't exist
 	if err := os.MkdirAll(f.basePath, 0750); err != nil {
 		return fmt.Errorf("failed to create storage directory: %w", err)
@@ -75,7 +75,7 @@ func (f *FileStorageManager) Store(_ context.Context, _ *config.Config, reg *reg
 }
 
 // Get retrieves and parses registry data from the JSON file
-func (f *FileStorageManager) Get(_ context.Context, _ *config.Config) (*registry.Registry, error) {
+func (f *FileStorageManager) Get(_ context.Context, _ *config.Config) (*regtypes.Registry, error) {
 	filePath := filepath.Join(f.basePath, RegistryFileName)
 
 	// Read file
@@ -89,7 +89,7 @@ func (f *FileStorageManager) Get(_ context.Context, _ *config.Config) (*registry
 	}
 
 	// Unmarshal JSON
-	var reg registry.Registry
+	var reg regtypes.Registry
 	if err := json.Unmarshal(data, &reg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal registry data: %w", err)
 	}

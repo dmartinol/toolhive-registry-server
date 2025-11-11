@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stacklok/toolhive/pkg/registry"
+	regtypes "github.com/stacklok/toolhive/pkg/registry/types"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/stacklok/toolhive-registry-server/pkg/config"
@@ -195,7 +196,7 @@ func TestTestRegistryBuilder_WithRemoteServer(t *testing.T) {
 
 			if tt.shouldAdd {
 				assert.Len(t, builder.registry.RemoteServers, 1)
-				var remoteServer *registry.RemoteServerMetadata
+				var remoteServer *regtypes.RemoteServerMetadata
 				for _, server := range builder.registry.RemoteServers {
 					remoteServer = server
 					break
@@ -478,7 +479,7 @@ func TestTestRegistryBuilder_BuildJSON(t *testing.T) {
 			switch tt.format {
 			case config.SourceFormatToolHive, "":
 				// Should be a registry object
-				var registry registry.Registry
+				var registry regtypes.Registry
 				err = json.Unmarshal(jsonData, &registry)
 				assert.NoError(t, err)
 				assert.Equal(t, "1.0.0", registry.Version)
@@ -510,7 +511,7 @@ func TestTestRegistryBuilder_BuildPrettyJSON(t *testing.T) {
 	assert.Greater(t, len(prettyJSON), len(regularJSON))
 
 	// Both should unmarshal to the same data
-	var prettyData, regularData registry.Registry
+	var prettyData, regularData regtypes.Registry
 	err1 := json.Unmarshal(prettyJSON, &prettyData)
 	err2 := json.Unmarshal(regularJSON, &regularData)
 	assert.NoError(t, err1)
