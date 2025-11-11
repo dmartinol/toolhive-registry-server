@@ -65,7 +65,7 @@ type MockSourceDataValidator struct {
 	mock.Mock
 }
 
-func (m *MockSourceDataValidator) ValidateData(data []byte, format string) (*regtypes.Registry, error) {
+func (m *MockSourceDataValidator) ValidateData(data []byte, format config.SourceFormat) (*regtypes.Registry, error) {
 	args := m.Called(data, format)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)

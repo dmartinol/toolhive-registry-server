@@ -31,7 +31,8 @@ filter:
     exclude: ["experimental", "deprecated", "beta"]`,
 			wantConfig: &Config{
 				Source: SourceConfig{
-					Type: "file",
+					Type:   "file",
+					Format: SourceFormatToolHive,
 					File: &FileConfig{
 						Path: "/data/registry.json",
 					},
@@ -62,7 +63,8 @@ filter:
     exclude: []`,
 			wantConfig: &Config{
 				Source: SourceConfig{
-					Type: "file",
+					Type:   "file",
+					Format: SourceFormatToolHive,
 					File: &FileConfig{
 						Path: "/data/registry.json",
 					},
@@ -92,7 +94,8 @@ filter:
     include: ["api", "backend", "frontend"]`,
 			wantConfig: &Config{
 				Source: SourceConfig{
-					Type: "file",
+					Type:   "file",
+					Format: SourceFormatToolHive,
 					File: &FileConfig{
 						Path: "/data/registry.json",
 					},
@@ -122,7 +125,8 @@ filter:
     exclude: ["test", "debug", "experimental"]`,
 			wantConfig: &Config{
 				Source: SourceConfig{
-					Type: "file",
+					Type:   "file",
+					Format: SourceFormatToolHive,
 					File: &FileConfig{
 						Path: "/data/registry.json",
 					},
@@ -191,7 +195,8 @@ func TestConfigStructure(t *testing.T) {
 	// Test that the Config struct can be properly marshaled and unmarshaled
 	originalConfig := &Config{
 		Source: SourceConfig{
-			Type: "file",
+			Type:   "file",
+			Format: SourceFormatToolHive,
 			File: &FileConfig{
 				Path: "/data/registry.json",
 			},

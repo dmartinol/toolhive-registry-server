@@ -16,8 +16,8 @@ func TestNewTestRegistryBuilder(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		format         string
-		expectedFormat string
+		format         config.SourceFormat
+		expectedFormat config.SourceFormat
 	}{
 		{
 			name:           "toolhive format",
@@ -68,7 +68,7 @@ func TestTestRegistryBuilder_WithServer(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		format       string
+		format       config.SourceFormat
 		serverName   string
 		expectedName string
 	}{
@@ -150,7 +150,7 @@ func TestTestRegistryBuilder_WithRemoteServer(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		format      string
+		format      config.SourceFormat
 		url         string
 		expectedURL string
 		shouldAdd   bool
@@ -224,7 +224,7 @@ func TestTestRegistryBuilder_WithRemoteServerName(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		format      string
+		format      config.SourceFormat
 		serverName  string
 		url         string
 		expectedURL string
@@ -285,7 +285,7 @@ func TestTestRegistryBuilder_WithVersion(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		format       string
+		format       config.SourceFormat
 		version      string
 		shouldUpdate bool
 	}{
@@ -293,12 +293,6 @@ func TestTestRegistryBuilder_WithVersion(t *testing.T) {
 			name:         "toolhive format should update version",
 			format:       config.SourceFormatToolHive,
 			version:      "2.0.0",
-			shouldUpdate: true,
-		},
-		{
-			name:         "empty format should update version",
-			format:       "",
-			version:      "3.0.0",
 			shouldUpdate: true,
 		},
 		{
@@ -336,19 +330,13 @@ func TestTestRegistryBuilder_WithLastUpdated(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		format       string
+		format       config.SourceFormat
 		timestamp    string
 		shouldUpdate bool
 	}{
 		{
 			name:         "toolhive format should update timestamp",
 			format:       config.SourceFormatToolHive,
-			timestamp:    "2023-01-01T00:00:00Z",
-			shouldUpdate: true,
-		},
-		{
-			name:         "empty format should update timestamp",
-			format:       "",
 			timestamp:    "2023-01-01T00:00:00Z",
 			shouldUpdate: true,
 		},
@@ -392,7 +380,7 @@ func TestTestRegistryBuilder_Empty(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		format string
+		format config.SourceFormat
 	}{
 		{
 			name:   "toolhive format",
@@ -444,7 +432,7 @@ func TestTestRegistryBuilder_BuildJSON(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		format string
+		format config.SourceFormat
 	}{
 		{
 			name:   "toolhive format",
@@ -524,7 +512,7 @@ func TestTestRegistryBuilder_GetRegistry(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		format       string
+		format       config.SourceFormat
 		shouldReturn bool
 	}{
 		{
@@ -569,7 +557,7 @@ func TestTestRegistryBuilder_GetUpstreamData(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		format       string
+		format       config.SourceFormat
 		shouldReturn bool
 	}{
 		{
@@ -613,7 +601,7 @@ func TestTestRegistryBuilder_ServerCount(t *testing.T) {
 
 	tests := []struct {
 		name               string
-		format             string
+		format             config.SourceFormat
 		serversToAdd       int
 		remoteServersToAdd int
 		expectedCount      int
@@ -693,7 +681,7 @@ func TestTestRegistryBuilder_RemoteServerCount(t *testing.T) {
 
 	tests := []struct {
 		name               string
-		format             string
+		format             config.SourceFormat
 		remoteServersToAdd int
 		expectedCount      int
 	}{
@@ -783,7 +771,7 @@ func TestEmptyJSON(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		format       string
+		format       config.SourceFormat
 		expectedJSON string
 	}{
 		{

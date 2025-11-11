@@ -14,7 +14,7 @@ import (
 // SourceDataValidator is an interface for validating registry source configurations
 type SourceDataValidator interface {
 	// ValidateData validates raw data and returns a parsed Registry
-	ValidateData(data []byte, format string) (*regtypes.Registry, error)
+	ValidateData(data []byte, format config.SourceFormat) (*regtypes.Registry, error)
 }
 
 //go:generate mockgen -destination=mocks/mock_source_handler.go -package=mocks -source=types.go SourceHandler,SourceHandlerFactory
@@ -43,12 +43,12 @@ type FetchResult struct {
 	ServerCount int
 
 	// Format indicates the original format of the source data
-	Format string
+	Format config.SourceFormat
 }
 
 // NewFetchResult creates a new FetchResult from a Registry instance and pre-calculated hash
 // The hash should be calculated by the source handler to ensure consistency with CurrentHash
-func NewFetchResult(reg *regtypes.Registry, hash string, format string) *FetchResult {
+func NewFetchResult(reg *regtypes.Registry, hash string, format config.SourceFormat) *FetchResult {
 	serverCount := len(reg.Servers) + len(reg.RemoteServers)
 
 	return &FetchResult{
@@ -74,7 +74,7 @@ func NewSourceDataValidator() SourceDataValidator {
 }
 
 // ValidateData validates raw data and returns a parsed Registry
-func (*DefaultSourceDataValidator) ValidateData(data []byte, format string) (*regtypes.Registry, error) {
+func (*DefaultSourceDataValidator) ValidateData(data []byte, format config.SourceFormat) (*regtypes.Registry, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("data cannot be empty")
 	}

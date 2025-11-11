@@ -21,12 +21,15 @@ const (
 	SourceTypeFile = "file"
 )
 
+// SourceFormat represents the registry data format
+type SourceFormat string
+
 const (
 	// SourceFormatToolHive is the native ToolHive registry format
-	SourceFormatToolHive = "toolhive"
+	SourceFormatToolHive SourceFormat = "toolhive"
 
 	// SourceFormatUpstream is the upstream MCP registry format
-	SourceFormatUpstream = "upstream"
+	SourceFormatUpstream SourceFormat = "upstream"
 )
 
 // Option defines the interface for configuration options
@@ -61,7 +64,7 @@ func WithConfigPath(path string) Option {
 		cfg.path = realPath
 		return nil
 	}
-}
+
 
 // Config represents the root configuration structure
 type Config struct {
@@ -75,11 +78,35 @@ type Config struct {
 
 // SourceConfig defines the data source configuration
 type SourceConfig struct {
-	Type   string      `yaml:"type"`
-	Format string      `yaml:"format"`
-	Git    *GitConfig  `yaml:"git,omitempty"`
-	API    *APIConfig  `yaml:"api,omitempty"`
-	File   *FileConfig `yaml:"file,omitempty"`
+	Type string `yaml:"type"`
+	// Format specifies the registry data format (toolhive or upstream)
+	// Defaults to "toolhive" if not specified
+	Format SourceFormat `yaml:"format"`
+	Git    *GitConfig   `yaml:"git,omitempty"`
+	API    *APIConfig   `yaml:"api,omitempty"`
+	File   *FileConfig  `yaml:"file,omitempty"`
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling for SourceConfig
+// to ensure Format defaults to SourceFormatToolHive when not specified
+func (sc *SourceConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Create a temporary type to avoid infinite recursion
+	type sourceConfigAlias SourceConfig
+
+	// Unmarshal into the alias type
+	var temp sourceConfigAlias
+	if err := unmarshal(&temp); err != nil {
+		return err
+	}
+
+	// Apply default for Format if empty
+	if temp.Format == "" {
+		temp.Format = SourceFormatToolHive
+	}
+
+	// Copy back to the original struct
+	*sc = SourceConfig(temp)
+	return nil
 }
 
 // GitConfig defines Git source settings
@@ -193,6 +220,13 @@ func (c *Config) validate() error {
 	// Validate source configuration
 	if c.Source.Type == "" {
 		return fmt.Errorf("source.type is required")
+	}
+
+	// Validate format if specified
+	if c.Source.Format != "" {
+		if err := c.Source.Format.Validate(); err != nil {
+			return fmt.Errorf("source.format: %w", err)
+		}
 	}
 
 	// Validate source-specific settings

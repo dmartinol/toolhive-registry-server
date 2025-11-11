@@ -44,7 +44,7 @@ func (m *MockSourceDataValidator) EXPECT() *MockSourceDataValidatorMockRecorder 
 }
 
 // ValidateData mocks base method.
-func (m *MockSourceDataValidator) ValidateData(data []byte, format string) (*types.Registry, error) {
+func (m *MockSourceDataValidator) ValidateData(data []byte, format config.SourceFormat) (*types.Registry, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ValidateData", data, format)
 	ret0, _ := ret[0].(*types.Registry)

@@ -16,7 +16,7 @@ func TestNewFetchResult(t *testing.T) {
 		name         string
 		registryData *regtypes.Registry
 		hash         string
-		format       string
+		format       config.SourceFormat
 	}{
 		{
 			name: "empty registry",
@@ -184,7 +184,7 @@ func TestDefaultSourceDataValidator_ValidateData(t *testing.T) {
 	tests := []struct {
 		name          string
 		data          []byte
-		format        string
+		format        config.SourceFormat
 		expectError   bool
 		errorContains string
 	}{

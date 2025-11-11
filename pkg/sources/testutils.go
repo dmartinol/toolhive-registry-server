@@ -13,21 +13,21 @@ import (
 
 // TestRegistryBuilder provides a fluent interface for building test registry data
 type TestRegistryBuilder struct {
-	format        string
+	format        config.SourceFormat
 	registry      *regtypes.Registry
 	upstreamData  []registry.UpstreamServerDetail
 	serverCounter int
 }
 
 // NewTestRegistryBuilder creates a new test registry builder for the specified format
-func NewTestRegistryBuilder(format string) *TestRegistryBuilder {
+func NewTestRegistryBuilder(format config.SourceFormat) *TestRegistryBuilder {
 	builder := &TestRegistryBuilder{
 		format:        format,
 		serverCounter: 1,
 	}
 
 	switch format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		builder.registry = &regtypes.Registry{
 			Version:       "1.0.0",
 			LastUpdated:   time.Now().Format(time.RFC3339),
@@ -49,7 +49,7 @@ func (b *TestRegistryBuilder) WithServer(name string) *TestRegistryBuilder {
 	}
 
 	switch b.format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		b.registry.Servers[name] = &regtypes.ImageMetadata{
 			BaseServerMetadata: regtypes.BaseServerMetadata{
 				Name:        name,
@@ -183,7 +183,7 @@ func (b *TestRegistryBuilder) WithLastUpdated(timestamp string) *TestRegistryBui
 // Empty creates an empty registry with minimal required fields
 func (b *TestRegistryBuilder) Empty() *TestRegistryBuilder {
 	switch b.format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		// Keep the registry structure but clear servers
 		b.registry.Servers = make(map[string]*regtypes.ImageMetadata)
 		b.registry.RemoteServers = make(map[string]*regtypes.RemoteServerMetadata)
@@ -199,7 +199,7 @@ func (b *TestRegistryBuilder) BuildJSON() []byte {
 	var err error
 
 	switch b.format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		data, err = json.Marshal(b.registry)
 	case config.SourceFormatUpstream:
 		data, err = json.Marshal(b.upstreamData)
@@ -218,7 +218,7 @@ func (b *TestRegistryBuilder) BuildPrettyJSON() []byte {
 	var err error
 
 	switch b.format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		data, err = json.MarshalIndent(b.registry, "", "  ")
 	case config.SourceFormatUpstream:
 		data, err = json.MarshalIndent(b.upstreamData, "", "  ")
@@ -250,7 +250,7 @@ func (b *TestRegistryBuilder) GetUpstreamData() []registry.UpstreamServerDetail 
 // ServerCount returns the number of servers (both container and remote for ToolHive format)
 func (b *TestRegistryBuilder) ServerCount() int {
 	switch b.format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		return len(b.registry.Servers) + len(b.registry.RemoteServers)
 	case config.SourceFormatUpstream:
 		return len(b.upstreamData)
@@ -261,7 +261,7 @@ func (b *TestRegistryBuilder) ServerCount() int {
 // ContainerServerCount returns the number of container servers only
 func (b *TestRegistryBuilder) ContainerServerCount() int {
 	switch b.format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		return len(b.registry.Servers)
 	case config.SourceFormatUpstream:
 		return len(b.upstreamData)
@@ -283,9 +283,9 @@ func InvalidJSON() []byte {
 }
 
 // EmptyJSON returns empty JSON object/array based on format
-func EmptyJSON(format string) []byte {
+func EmptyJSON(format config.SourceFormat) []byte {
 	switch format {
-	case config.SourceFormatToolHive, "":
+	case config.SourceFormatToolHive, "": // Empty format defaults to toolhive for test utility
 		return []byte("{}")
 	case config.SourceFormatUpstream:
 		return []byte("[]")
