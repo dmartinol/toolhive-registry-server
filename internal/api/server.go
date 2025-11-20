@@ -12,6 +12,7 @@ import (
 	extensionv0 "github.com/stacklok/toolhive-registry-server/internal/api/extension/v0"
 	v01 "github.com/stacklok/toolhive-registry-server/internal/api/registry/v01"
 	v0 "github.com/stacklok/toolhive-registry-server/internal/api/v0"
+	"github.com/stacklok/toolhive-registry-server/internal/mcp"
 	"github.com/stacklok/toolhive-registry-server/internal/service"
 )
 
@@ -21,12 +22,20 @@ type ServerOption func(*serverConfig)
 // serverConfig holds the server configuration
 type serverConfig struct {
 	middlewares []func(http.Handler) http.Handler
+	enableMCP   bool
 }
 
 // WithMiddlewares adds middleware to the server
 func WithMiddlewares(mw ...func(http.Handler) http.Handler) ServerOption {
 	return func(cfg *serverConfig) {
 		cfg.middlewares = append(cfg.middlewares, mw...)
+	}
+}
+
+// WithMCP enables the MCP endpoint
+func WithMCP(enable bool) ServerOption {
+	return func(cfg *serverConfig) {
+		cfg.enableMCP = enable
 	}
 }
 
@@ -59,6 +68,19 @@ func NewServer(svc service.RegistryService, opts ...ServerOption) *chi.Mux {
 	r.Mount("/registry", v01.Router(svc))
 	r.Mount("/extension/v0", extensionv0.Router(svc))
 	r.Mount("/v0", v0.Router(svc))
+
+	// Mount MCP endpoints if enabled
+	if cfg.enableMCP {
+		logger.Info("MCP endpoints enabled at /mcp")
+		mcpServer := mcp.NewServer(svc)
+		mcpTransport := mcp.NewTransport(mcpServer)
+
+		r.Route("/mcp", func(r chi.Router) {
+			r.Post("/", mcpTransport.ServeHTTP)
+			r.Get("/sse", mcpTransport.ServeSSE)
+			r.Post("/jsonrpc", mcpTransport.ServeJSONRPC)
+		})
+	}
 
 	return r
 }

@@ -1,0 +1,55 @@
+# Example configuration for MCP Server
+# This file can be used with both thv-registry-mcp and thv-registry-api (with --enable-mcp)
+
+registry:
+  name: toolhive-mcp-registry
+  description: ToolHive Registry for MCP Server
+
+# Registry data source
+# Choose one of: file, git, or api
+source:
+  # File-based source (simplest)
+  type: file
+  file:
+    path: ./data/registry.json
+
+  # Git-based source (for syncing from a repository)
+  # type: git
+  # git:
+  #   url: https://github.com/stacklok/toolhive-registry-data.git
+  #   branch: main
+  #   path: registry.json
+  #   auth:
+  #     type: none
+
+  # API-based source (for syncing from another registry)
+  # type: api
+  # api:
+  #   base_url: https://registry.modelcontextprotocol.io
+  #   format: upstream
+
+# Synchronization settings (optional, only used with git/api sources)
+sync:
+  enabled: true
+  policy: interval
+  interval: 1h
+  retry:
+    max_attempts: 3
+    initial_backoff: 1s
+    max_backoff: 1m
+
+# Filtering (optional)
+filtering:
+  enabled: false
+  # name_patterns:
+  #   include:
+  #     - "io.github.*"
+  #   exclude:
+  #     - "*.test"
+  # tags:
+  #   include:
+  #     - "database"
+  #     - "files"
+  #   exclude:
+  #     - "deprecated"
+

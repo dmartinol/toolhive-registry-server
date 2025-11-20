@@ -25,12 +25,26 @@ The ToolHive Registry API (`thv-registry-api`) implements the official [Model Co
 
 ## Features
 
+### Registry API Server (`thv-registry-api`)
+
 - **Standards-compliant**: Implements the official MCP Registry API specification
 - **Multiple data sources**: Git repositories, API endpoints, and local files
 - **Automatic synchronization**: Background sync with configurable intervals and retry logic
 - **Container-ready**: Designed for deployment in Kubernetes clusters
 - **Flexible deployment**: Works standalone or as part of ToolHive infrastructure
 - **Production-ready**: Built-in health checks, graceful shutdown, and sync status persistence
+- **Optional MCP endpoints**: Enable MCP protocol support with `--enable-mcp` flag
+
+### MCP Server (`thv-registry-mcp`)
+
+- **MCP Protocol**: Native Model Context Protocol implementation for AI assistants
+- **Natural Language Search**: Query servers using conversational language
+- **Rich Metadata**: Access stars, pulls, tools, and ToolHive-specific data
+- **Multiple Tools**: search, details, list, and compare operations
+- **Flexible Transport**: HTTP, SSE, and stdio modes
+- **AI Assistant Ready**: Works with Claude Desktop and other MCP clients
+
+See [MCPServer.md](MCPServer.md) for complete MCP server documentation.
 
 ## Quick Start
 
@@ -39,11 +53,17 @@ The ToolHive Registry API (`thv-registry-api`) implements the official [Model Co
 - Go 1.23 or later
 - [Task](https://taskfile.dev) for build automation
 
-### Building the binary
+### Building the binaries
 
 ```bash
-# Build the binary
+# Build the API server
 task build
+
+# Build the MCP server
+task build-mcp
+
+# Build both
+task build-all
 ```
 
 ### Running the Server
@@ -77,11 +97,11 @@ For detailed configuration options and examples, see the [examples/README.md](ex
 
 ### Available Commands
 
-The `thv-registry-api` CLI provides the following commands:
+#### Registry API Server (`thv-registry-api`)
 
 ```bash
 # Start the API server
-thv-registry-api serve --config config.yaml [--address :8080]
+thv-registry-api serve --config config.yaml [--address :8080] [--enable-mcp]
 
 # Run database migrations
 thv-registry-api migrate up --config config.yaml [--yes]
@@ -96,6 +116,24 @@ thv-registry-api <command> --help
 ```
 
 See the [Database Migrations](#database-migrations) section for more details on using migration commands.
+
+#### MCP Server (`thv-registry-mcp`)
+
+```bash
+# Start the MCP server (HTTP mode)
+thv-registry-mcp serve --config config.yaml [--address :8081]
+
+# Start the MCP server (stdio mode for AI assistants)
+thv-registry-mcp serve --config config.yaml --transport stdio
+
+# Display version information
+thv-registry-mcp version [--json]
+
+# Show help
+thv-registry-mcp --help
+```
+
+For detailed MCP server usage and AI assistant integration, see [MCPServer.md](MCPServer.md).
 
 ## API Endpoints
 

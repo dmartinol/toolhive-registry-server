@@ -55,6 +55,7 @@ type registryAppConfig struct {
 	readTimeout    time.Duration
 	writeTimeout   time.Duration
 	idleTimeout    time.Duration
+	enableMCP      bool
 
 	// Data directories
 	dataDir      string
@@ -169,6 +170,14 @@ func WithAddress(addr string) RegistryAppOptions {
 func WithMiddlewares(mw ...func(http.Handler) http.Handler) RegistryAppOptions {
 	return func(cfg *registryAppConfig) error {
 		cfg.middlewares = mw
+		return nil
+	}
+}
+
+// WithMCP enables the MCP endpoints
+func WithMCP(enable bool) RegistryAppOptions {
+	return func(cfg *registryAppConfig) error {
+		cfg.enableMCP = enable
 		return nil
 	}
 }
@@ -313,8 +322,11 @@ func buildHTTPServer(
 		}
 	}
 
-	// Create router with middlewares
-	router := api.NewServer(svc, api.WithMiddlewares(b.middlewares...))
+	// Create router with middlewares and MCP support
+	router := api.NewServer(svc, 
+		api.WithMiddlewares(b.middlewares...),
+		api.WithMCP(b.enableMCP),
+	)
 
 	// Create HTTP server
 	server := &http.Server{

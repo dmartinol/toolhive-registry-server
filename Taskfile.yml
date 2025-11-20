@@ -139,6 +139,15 @@ tasks:
     cmds:
       - go build -o bin/thv-registry-api ./cmd/thv-registry-api
 
+  build-mcp:
+    desc: Build the MCP server binary
+    cmds:
+      - go build -o bin/thv-registry-mcp ./cmd/thv-registry-mcp
+
+  build-all:
+    desc: Build all binaries
+    deps: [build, build-mcp]
+
   build-image:
     desc: Build the registry API image with ko
     deps:

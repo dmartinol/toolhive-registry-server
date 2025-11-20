@@ -40,6 +40,83 @@ curl http://localhost:8080/api/v0/servers | jq
 
 ---
 
+## MCP Server Examples
+
+The project includes an MCP (Model Context Protocol) server that exposes registry data to AI assistants. The MCP server can run in two modes:
+
+### Option 1: Integrated Mode (Recommended for Most Users)
+
+Run MCP endpoints alongside the REST API in a single server.
+
+**Quick Start Guide:** [quick-start-integrated.md](quick-start-integrated.md)
+
+**Interactive Demo:** [mcp-integrated-example.sh](mcp-integrated-example.sh)
+
+```bash
+# Start API server with MCP enabled
+thv-registry-api serve \
+  --config examples/config-file.yaml \
+  --address :8080 \
+  --enable-mcp
+
+# MCP endpoints available at: http://localhost:8080/mcp
+
+# Run interactive demo
+./examples/mcp-integrated-example.sh
+```
+
+**Benefits:**
+- Single server to manage
+- Both REST and MCP on same port
+- Shared configuration and data
+- Lower resource usage
+
+### Option 2: Standalone Mode
+
+Run a dedicated MCP server (useful for stdio integration with AI assistants).
+
+**Configuration:** [mcp-config.yaml](mcp-config.yaml)
+
+**Interactive Demo:** [mcp-examples.sh](mcp-examples.sh)
+
+```bash
+# Start standalone MCP server (HTTP mode)
+thv-registry-mcp serve --config examples/mcp-config.yaml --address :8081
+
+# Start standalone MCP server (stdio mode for AI assistants)
+thv-registry-mcp serve --config examples/mcp-config.yaml --transport stdio
+
+# Run interactive demo
+./examples/mcp-examples.sh
+```
+
+**Benefits:**
+- Dedicated MCP protocol server
+- Stdio support for direct AI integration
+- Independent scaling
+- Specialized deployment
+
+### Claude Desktop Integration
+
+**File:** [claude-desktop-config.json](claude-desktop-config.json)
+
+Example configuration for integrating with Claude Desktop:
+
+1. Copy the configuration to your Claude Desktop config file
+2. Update the paths to match your installation
+3. Restart Claude Desktop
+
+### Complete Documentation
+
+See [MCPServer.md](../MCPServer.md) for:
+- Complete MCP tool documentation
+- AI assistant integration guides
+- Configuration options
+- Troubleshooting
+- API reference
+
+---
+
 ## Configuration Files
 
 ### 1. Git Repository Source

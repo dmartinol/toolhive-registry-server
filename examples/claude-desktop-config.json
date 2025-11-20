@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "toolhive-registry": {
+      "command": "/path/to/thv-registry-mcp",
+      "args": [
+        "serve",
+        "--config", "/path/to/config.yaml",
+        "--transport", "stdio"
+      ],
+      "env": {}
+    }
+  }
+}
+

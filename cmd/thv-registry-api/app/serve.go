@@ -39,6 +39,7 @@ const (
 func init() {
 	serveCmd.Flags().String("address", ":8080", "Address to listen on")
 	serveCmd.Flags().String("config", "", "Path to configuration file (YAML format, required)")
+	serveCmd.Flags().Bool("enable-mcp", false, "Enable MCP (Model Context Protocol) endpoints at /mcp")
 
 	err := viper.BindPFlag("address", serveCmd.Flags().Lookup("address"))
 	if err != nil {
@@ -47,6 +48,10 @@ func init() {
 	err = viper.BindPFlag("config", serveCmd.Flags().Lookup("config"))
 	if err != nil {
 		logger.Fatalf("Failed to bind config flag: %v", err)
+	}
+	err = viper.BindPFlag("enable-mcp", serveCmd.Flags().Lookup("enable-mcp"))
+	if err != nil {
+		logger.Fatalf("Failed to bind enable-mcp flag: %v", err)
 	}
 
 	// Mark config as required
@@ -75,11 +80,19 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	// Build application using the builder pattern
 	address := viper.GetString("address")
-	app, err := registryapp.NewRegistryApp(
-		ctx,
+	enableMCP := viper.GetBool("enable-mcp")
+	
+	appOpts := []registryapp.RegistryAppOptions{
 		registryapp.WithConfig(cfg),
 		registryapp.WithAddress(address),
-	)
+	}
+	
+	if enableMCP {
+		logger.Info("MCP endpoints will be enabled")
+		appOpts = append(appOpts, registryapp.WithMCP(true))
+	}
+	
+	app, err := registryapp.NewRegistryApp(ctx, appOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to build application: %w", err)
 	}
