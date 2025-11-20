@@ -37,11 +37,13 @@ The ToolHive Registry API (`thv-registry-api`) implements the official [Model Co
 
 ### MCP Server (`thv-registry-mcp`)
 
-- **MCP Protocol**: Native Model Context Protocol implementation for AI assistants
+- **Official Go SDK**: Built on [modelcontextprotocol/go-sdk](https://github.com/modelcontextprotocol/go-sdk) v1.1.0
+- **Standards Compliant**: Guaranteed MCP specification compliance via SDK
+- **Type-Safe Tools**: Automatic JSON schema generation from Go structs
 - **Natural Language Search**: Query servers using conversational language
 - **Rich Metadata**: Access stars, pulls, tools, and ToolHive-specific data
 - **Multiple Tools**: search, details, list, and compare operations
-- **Flexible Transport**: HTTP, SSE, and stdio modes
+- **Flexible Transport**: HTTP (StreamableHTTP) and stdio modes
 - **AI Assistant Ready**: Works with Claude Desktop and other MCP clients
 
 See [MCPServer.md](MCPServer.md) for complete MCP server documentation.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stacklok/toolhive/pkg/logger"
 
 	extensionv0 "github.com/stacklok/toolhive-registry-server/internal/api/extension/v0"
@@ -73,13 +74,15 @@ func NewServer(svc service.RegistryService, opts ...ServerOption) *chi.Mux {
 	if cfg.enableMCP {
 		logger.Info("MCP endpoints enabled at /mcp")
 		mcpServer := mcp.NewServer(svc)
-		mcpTransport := mcp.NewTransport(mcpServer)
+		sdkServer := mcpServer.GetSDKServer()
 
-		r.Route("/mcp", func(r chi.Router) {
-			r.Post("/", mcpTransport.ServeHTTP)
-			r.Get("/sse", mcpTransport.ServeSSE)
-			r.Post("/jsonrpc", mcpTransport.ServeJSONRPC)
-		})
+		// Create SDK StreamableHTTPHandler
+		mcpHandler := sdkmcp.NewStreamableHTTPHandler(func(req *http.Request) *sdkmcp.Server {
+			return sdkServer
+		}, nil)
+
+		// Mount the MCP handler at /mcp
+		r.Mount("/mcp", mcpHandler)
 	}
 
 	return r

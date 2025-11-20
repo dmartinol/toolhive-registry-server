@@ -3,17 +3,45 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	upstreamv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
 	"github.com/stacklok/toolhive/pkg/logger"
 
 	"github.com/stacklok/toolhive-registry-server/internal/filtering"
 	"github.com/stacklok/toolhive-registry-server/internal/registry"
 )
+
+// Parameter structs for SDK tools with jsonschema tags for automatic schema generation
+
+// SearchServersParams defines parameters for the search_servers tool
+type SearchServersParams struct {
+	Query string   `json:"query" jsonschema:"Natural language query or keywords to search for"`
+	Tags  []string `json:"tags,omitempty" jsonschema:"Optional array of tags to filter by"`
+	Limit int      `json:"limit,omitempty" jsonschema:"Maximum number of results to return (default: 10)"`
+}
+
+// GetServerDetailsParams defines parameters for the get_server_details tool
+type GetServerDetailsParams struct {
+	ServerName string `json:"server_name" jsonschema:"Fully qualified server name"`
+	Version    string `json:"version,omitempty" jsonschema:"Specific version or 'latest' (default: 'latest')"`
+}
+
+// ListServersParams defines parameters for the list_servers tool
+type ListServersParams struct {
+	Cursor        string `json:"cursor,omitempty" jsonschema:"Pagination cursor for retrieving next set of results"`
+	Limit         int    `json:"limit,omitempty" jsonschema:"Maximum number of results per page (default: 20)"`
+	VersionFilter string `json:"version_filter,omitempty" jsonschema:"Filter by version: 'latest' or specific version"`
+	SortBy        string `json:"sort_by,omitempty" jsonschema:"Sort results by field"`
+}
+
+// CompareServersParams defines parameters for the compare_servers tool
+type CompareServersParams struct {
+	ServerNames []string `json:"server_names" jsonschema:"List of server names to compare (2-5 servers)"`
+}
 
 // ToolHive metadata extraction helpers
 
@@ -100,42 +128,28 @@ func extractLastUpdated(server upstreamv0.ServerJSON) string {
 	return ""
 }
 
-// Tool handler implementations
+// Tool handler implementations (SDK signatures)
 
-// handleSearchServers implements the search_servers tool
-func (s *Server) handleSearchServers(ctx context.Context, args map[string]any) (CallToolResult, error) {
-	// Parse arguments
-	query, _ := args["query"].(string)
-	if query == "" {
-		return CallToolResult{
-			Content: []Content{{Type: "text", Text: "Error: query parameter is required"}},
-			IsError: true,
-		}, nil
+// searchServers implements the search_servers tool
+func (s *Server) searchServers(ctx context.Context, req *sdkmcp.CallToolRequest, params *SearchServersParams) (*sdkmcp.CallToolResult, any, error) {
+	// SDK validates required fields, so query is guaranteed to be present
+	query := params.Query
+	
+	limit := params.Limit
+	if limit == 0 {
+		limit = 10 // default
 	}
 
-	limit := 10
-	if limitFloat, ok := args["limit"].(float64); ok {
-		limit = int(limitFloat)
-	}
-
-	var tags []string
-	if tagsAny, ok := args["tags"].([]any); ok {
-		tags = make([]string, 0, len(tagsAny))
-		for _, tag := range tagsAny {
-			if tagStr, ok := tag.(string); ok {
-				tags = append(tags, tagStr)
-			}
-		}
-	}
+	tags := params.Tags
 
 	// Get all servers from registry
 	servers, err := s.service.ListServers(ctx)
 	if err != nil {
 		logger.Errorf("Failed to list servers: %v", err)
-		return CallToolResult{
-			Content: []Content{{Type: "text", Text: fmt.Sprintf("Error: failed to list servers: %v", err)}},
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to list servers: %v", err)}},
 			IsError: true,
-		}, nil
+		}, nil, nil
 	}
 
 	// Filter by tags if provided
@@ -212,23 +226,17 @@ func (s *Server) handleSearchServers(ctx context.Context, args map[string]any) (
 		result.WriteString("No servers found matching your query. Try different keywords or remove tag filters.")
 	}
 
-	return CallToolResult{
-		Content: []Content{{Type: "text", Text: result.String()}},
-	}, nil
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: result.String()}},
+	}, nil, nil
 }
 
-// handleGetServerDetails implements the get_server_details tool
-func (s *Server) handleGetServerDetails(ctx context.Context, args map[string]any) (CallToolResult, error) {
-	// Parse arguments
-	serverName, _ := args["server_name"].(string)
-	if serverName == "" {
-		return CallToolResult{
-			Content: []Content{{Type: "text", Text: "Error: server_name parameter is required"}},
-			IsError: true,
-		}, nil
-	}
-
-	version, _ := args["version"].(string)
+// getServerDetails implements the get_server_details tool
+func (s *Server) getServerDetails(ctx context.Context, req *sdkmcp.CallToolRequest, params *GetServerDetailsParams) (*sdkmcp.CallToolResult, any, error) {
+	// SDK validates required fields
+	serverName := params.ServerName
+	
+	version := params.Version
 	if version == "" {
 		version = "latest"
 	}
@@ -237,10 +245,10 @@ func (s *Server) handleGetServerDetails(ctx context.Context, args map[string]any
 	server, err := s.service.GetServer(ctx, serverName)
 	if err != nil {
 		logger.Errorf("Failed to get server %s: %v", serverName, err)
-		return CallToolResult{
-			Content: []Content{{Type: "text", Text: fmt.Sprintf("Error: server not found: %s", serverName)}},
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", serverName)}},
 			IsError: true,
-		}, nil
+		}, nil, nil
 	}
 
 	// Extract metadata
@@ -317,20 +325,20 @@ func (s *Server) handleGetServerDetails(ctx context.Context, args map[string]any
 		result.WriteString(fmt.Sprintf("**Tags:** %s\n", strings.Join(tags, ", ")))
 	}
 
-	return CallToolResult{
-		Content: []Content{{Type: "text", Text: result.String()}},
-	}, nil
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: result.String()}},
+	}, nil, nil
 }
 
-// handleListServers implements the list_servers tool
-func (s *Server) handleListServers(ctx context.Context, args map[string]any) (CallToolResult, error) {
-	// Parse arguments
-	limit := 20
-	if limitFloat, ok := args["limit"].(float64); ok {
-		limit = int(limitFloat)
+// listServers implements the list_servers tool
+func (s *Server) listServers(ctx context.Context, req *sdkmcp.CallToolRequest, params *ListServersParams) (*sdkmcp.CallToolResult, any, error) {
+	// Set defaults
+	limit := params.Limit
+	if limit == 0 {
+		limit = 20
 	}
 
-	sortBy, _ := args["sort_by"].(string)
+	sortBy := params.SortBy
 	if sortBy == "" {
 		sortBy = "stars"
 	}
@@ -339,10 +347,10 @@ func (s *Server) handleListServers(ctx context.Context, args map[string]any) (Ca
 	servers, err := s.service.ListServers(ctx)
 	if err != nil {
 		logger.Errorf("Failed to list servers: %v", err)
-		return CallToolResult{
-			Content: []Content{{Type: "text", Text: fmt.Sprintf("Error: failed to list servers: %v", err)}},
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to list servers: %v", err)}},
 			IsError: true,
-		}, nil
+		}, nil, nil
 	}
 
 	// Sort servers
@@ -384,35 +392,15 @@ func (s *Server) handleListServers(ctx context.Context, args map[string]any) (Ca
 		result.WriteString(fmt.Sprintf("   ⭐ %d | 📦 %d\n\n", stars, pulls))
 	}
 
-	return CallToolResult{
-		Content: []Content{{Type: "text", Text: result.String()}},
-	}, nil
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: result.String()}},
+	}, nil, nil
 }
 
-// handleCompareServers implements the compare_servers tool
-func (s *Server) handleCompareServers(ctx context.Context, args map[string]any) (CallToolResult, error) {
-	// Parse arguments
-	serverNamesAny, ok := args["server_names"].([]any)
-	if !ok || len(serverNamesAny) < 2 {
-		return CallToolResult{
-			Content: []Content{{Type: "text", Text: "Error: server_names parameter is required and must contain at least 2 servers"}},
-			IsError: true,
-		}, nil
-	}
-
-	if len(serverNamesAny) > 5 {
-		return CallToolResult{
-			Content: []Content{{Type: "text", Text: "Error: maximum 5 servers can be compared at once"}},
-			IsError: true,
-		}, nil
-	}
-
-	serverNames := make([]string, 0, len(serverNamesAny))
-	for _, name := range serverNamesAny {
-		if nameStr, ok := name.(string); ok {
-			serverNames = append(serverNames, nameStr)
-		}
-	}
+// compareServers implements the compare_servers tool
+func (s *Server) compareServers(ctx context.Context, req *sdkmcp.CallToolRequest, params *CompareServersParams) (*sdkmcp.CallToolResult, any, error) {
+	// SDK validates array length via jsonschema tags (minItems=2, maxItems=5)
+	serverNames := params.ServerNames
 
 	// Fetch all servers
 	servers := make([]upstreamv0.ServerJSON, 0, len(serverNames))
@@ -420,10 +408,10 @@ func (s *Server) handleCompareServers(ctx context.Context, args map[string]any) 
 		server, err := s.service.GetServer(ctx, name)
 		if err != nil {
 			logger.Errorf("Failed to get server %s: %v", name, err)
-			return CallToolResult{
-				Content: []Content{{Type: "text", Text: fmt.Sprintf("Error: server not found: %s", name)}},
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", name)}},
 				IsError: true,
-			}, nil
+			}, nil, nil
 		}
 		servers = append(servers, server)
 	}
@@ -530,16 +518,7 @@ func (s *Server) handleCompareServers(ctx context.Context, args map[string]any) 
 		result.WriteString("\n")
 	}
 
-	return CallToolResult{
-		Content: []Content{{Type: "text", Text: result.String()}},
-	}, nil
-}
-
-// Helper to format JSON for display
-func formatJSON(data any) string {
-	jsonBytes, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Sprintf("Error formatting JSON: %v", err)
-	}
-	return string(jsonBytes)
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: result.String()}},
+	}, nil, nil
 }

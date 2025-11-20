@@ -9,8 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/stacklok/toolhive/pkg/logger"
@@ -81,18 +80,18 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to initialize registry service: %w", err)
 	}
 
-	// Create MCP server
+	// Create MCP server using SDK
 	mcpServer := mcp.NewServer(registryService)
-	transport := mcp.NewTransport(mcpServer)
+	sdkServer := mcpServer.GetSDKServer()
 
 	// Get transport mode
 	transportMode := viper.GetString("mcp.transport")
 
 	switch transportMode {
 	case "stdio":
-		return runStdioMode(ctx, transport)
+		return runStdioMode(ctx, sdkServer)
 	case "http":
-		return runHTTPMode(ctx, transport)
+		return runHTTPMode(ctx, sdkServer)
 	default:
 		return fmt.Errorf("unsupported transport mode: %s (use 'http' or 'stdio')", transportMode)
 	}
@@ -124,7 +123,7 @@ func initializeRegistryService(ctx context.Context, cfg *config.Config) (service
 	return svc, nil
 }
 
-func runStdioMode(ctx context.Context, transport *mcp.Transport) error {
+func runStdioMode(ctx context.Context, sdkServer *sdkmcp.Server) error {
 	logger.Info("Starting MCP server in stdio mode")
 
 	// Create a cancellable context for graceful shutdown
@@ -135,10 +134,10 @@ func runStdioMode(ctx context.Context, transport *mcp.Transport) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Run stdio transport in a goroutine
+	// Run SDK stdio transport in a goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- transport.ServeStdio(ctx, os.Stdin, os.Stdout)
+		errChan <- sdkServer.Run(ctx, &sdkmcp.StdioTransport{})
 	}()
 
 	// Wait for either completion or interrupt
@@ -161,35 +160,19 @@ func runStdioMode(ctx context.Context, transport *mcp.Transport) error {
 	}
 }
 
-func runHTTPMode(ctx context.Context, transport *mcp.Transport) error {
+func runHTTPMode(ctx context.Context, sdkServer *sdkmcp.Server) error {
 	address := viper.GetString("mcp.address")
 	logger.Infof("Starting MCP server in HTTP mode on %s", address)
 
-	// Create HTTP router
-	r := chi.NewRouter()
-
-	// Add middleware
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-
-	// MCP endpoints
-	r.Post("/", transport.ServeHTTP)
-	r.Get("/sse", transport.ServeSSE)
-	r.Post("/jsonrpc", transport.ServeJSONRPC)
-
-	// Health check
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"healthy"}`))
-	})
+	// Create SDK StreamableHTTPHandler
+	handler := sdkmcp.NewStreamableHTTPHandler(func(req *http.Request) *sdkmcp.Server {
+		return sdkServer
+	}, nil)
 
 	// Create HTTP server
 	server := &http.Server{
 		Addr:              address,
-		Handler:           r,
+		Handler:           handler,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -226,4 +209,3 @@ func runHTTPMode(ctx context.Context, transport *mcp.Transport) error {
 		return nil
 	}
 }
-
