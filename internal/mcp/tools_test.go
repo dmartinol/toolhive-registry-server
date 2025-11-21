@@ -1070,3 +1070,464 @@ func TestFindAlternatives_LimitParameter(t *testing.T) {
 	assert.Equal(t, 3, len(response.Alternatives), "Should respect limit parameter")
 	assert.Equal(t, 3, response.Metadata.Count)
 }
+
+// Journey 2 tool tests
+
+func TestFindSimilarServers_ByServerName(t *testing.T) {
+	t.Parallel()
+
+	sourceServer := upstreamv0.ServerJSON{
+		Name:    "io.test/postgres-server",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"database", "postgres", "sql"},
+						"tools": []any{"query", "execute"},
+					},
+				},
+			},
+		},
+	}
+
+	similarServer := upstreamv0.ServerJSON{
+		Name:    "io.test/mysql-server",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"database", "mysql", "sql"},
+						"tools": []any{"query", "execute"},
+					},
+				},
+			},
+		},
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/v0/servers/io.test/postgres-server/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": sourceServer})
+		case testServersPath:
+			response := upstreamv0.ServerListResponse{
+				Servers: []upstreamv0.ServerResponse{
+					{Server: sourceServer},
+					{Server: similarServer},
+				},
+				Metadata: upstreamv0.Metadata{Count: 2},
+			}
+			json.NewEncoder(w).Encode(response)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &FindSimilarServersParams{
+		ServerName: "io.test/postgres-server",
+		Limit:      5,
+	}
+
+	result, _, err := mcpServer.findSimilarServers(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+
+	var response struct {
+		Servers []struct {
+			Server          upstreamv0.ServerResponse `json:"server"`
+			SimilarityScore float64                   `json:"similarityScore"`
+			MatchReasons    []string                  `json:"matchReasons"`
+		} `json:"servers"`
+		Metadata struct {
+			Count          int    `json:"count"`
+			SearchCriteria string `json:"searchCriteria"`
+		} `json:"metadata"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	assert.Greater(t, len(response.Servers), 0, "Should find similar servers")
+	assert.Contains(t, response.Metadata.SearchCriteria, "similar to io.test/postgres-server")
+}
+
+func TestFindSimilarServers_ByTags(t *testing.T) {
+	t.Parallel()
+
+	server1 := upstreamv0.ServerJSON{
+		Name:    "io.test/database-server1",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags": []any{"database", "sql"},
+					},
+				},
+			},
+		},
+	}
+
+	server2 := upstreamv0.ServerJSON{
+		Name:    "io.test/file-server",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags": []any{"files", "storage"},
+					},
+				},
+			},
+		},
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == testServersPath {
+			response := upstreamv0.ServerListResponse{
+				Servers: []upstreamv0.ServerResponse{
+					{Server: server1},
+					{Server: server2},
+				},
+				Metadata: upstreamv0.Metadata{Count: 2},
+			}
+			json.NewEncoder(w).Encode(response)
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &FindSimilarServersParams{
+		Tags:  []string{"database", "sql"},
+		Limit: 10,
+	}
+
+	result, _, err := mcpServer.findSimilarServers(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+
+	var response struct {
+		Servers []struct {
+			Server upstreamv0.ServerResponse `json:"server"`
+		} `json:"servers"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should find only database-server1
+	assert.Equal(t, 1, len(response.Servers))
+	assert.Equal(t, "io.test/database-server1", response.Servers[0].Server.Server.Name)
+}
+
+func TestGetServerAnalytics(t *testing.T) {
+	t.Parallel()
+
+	server := upstreamv0.ServerJSON{
+		Name:    "io.test/analytics-test",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"database", "sql"},
+						"tools": []any{"query", "execute", "transaction"},
+						"metadata": map[string]any{
+							"stars": float64(150),
+							"pulls": float64(500),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/v0/servers/io.test/analytics-test/versions/latest" {
+			json.NewEncoder(w).Encode(map[string]any{"server": server})
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &GetServerAnalyticsParams{
+		ServerName: "io.test/analytics-test",
+		Period:     "30d",
+	}
+
+	result, _, err := mcpServer.getServerAnalytics(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+
+	var response struct {
+		ServerName string `json:"serverName"`
+		Period     string `json:"period"`
+		Current    struct {
+			Stars int64    `json:"stars"`
+			Pulls int64    `json:"pulls"`
+			Tools int      `json:"toolCount"`
+			Tags  []string `json:"tags"`
+		} `json:"current"`
+		Popularity struct {
+			Rank string `json:"rank"`
+		} `json:"popularity"`
+		Recommendations []string `json:"recommendations"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, "io.test/analytics-test", response.ServerName)
+	assert.Equal(t, "30d", response.Period)
+	assert.Equal(t, int64(150), response.Current.Stars)
+	assert.Equal(t, int64(500), response.Current.Pulls)
+	assert.Equal(t, 3, response.Current.Tools)
+	assert.NotEmpty(t, response.Popularity.Rank)
+}
+
+func TestGetEcosystemInsights_AllCategories(t *testing.T) {
+	t.Parallel()
+
+	servers := []upstreamv0.ServerJSON{
+		{
+			Name:    "io.test/db-server1",
+			Version: "1.0.0",
+			Packages: []model.Package{
+				{
+					RegistryType: "npm",
+					Transport:    model.Transport{Type: "stdio"},
+				},
+			},
+			Meta: &upstreamv0.ServerMeta{
+				PublisherProvided: map[string]any{
+					"provider": map[string]any{
+						"package": map[string]any{
+							"tags":  []any{"database", "sql"},
+							"tools": []any{"query"},
+							"metadata": map[string]any{
+								"stars": float64(100),
+								"pulls": float64(200),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:    "io.test/db-server2",
+			Version: "1.0.0",
+			Packages: []model.Package{
+				{
+					RegistryType: "pypi",
+					Transport:    model.Transport{Type: "http"},
+				},
+			},
+			Meta: &upstreamv0.ServerMeta{
+				PublisherProvided: map[string]any{
+					"provider": map[string]any{
+						"package": map[string]any{
+							"tags":  []any{"database", "nosql"},
+							"tools": []any{"query", "insert"},
+							"metadata": map[string]any{
+								"stars": float64(50),
+								"pulls": float64(100),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == testServersPath {
+			serverResponses := make([]upstreamv0.ServerResponse, len(servers))
+			for i, srv := range servers {
+				serverResponses[i] = upstreamv0.ServerResponse{Server: srv}
+			}
+			response := upstreamv0.ServerListResponse{
+				Servers:  serverResponses,
+				Metadata: upstreamv0.Metadata{Count: len(servers)},
+			}
+			json.NewEncoder(w).Encode(response)
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &GetEcosystemInsightsParams{
+		Category: "all",
+	}
+
+	result, _, err := mcpServer.getEcosystemInsights(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+
+	var response struct {
+		Category string `json:"category"`
+		Overview struct {
+			TotalServers int   `json:"totalServers"`
+			TotalStars   int64 `json:"totalStars"`
+			AvgStars     int64 `json:"avgStars"`
+		} `json:"overview"`
+		TopTags    []any    `json:"topTags"`
+		TopTools   []any    `json:"topTools"`
+		Transports []any    `json:"transports"`
+		Insights   []string `json:"insights"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, "all", response.Category)
+	assert.Equal(t, 2, response.Overview.TotalServers)
+	assert.Equal(t, int64(150), response.Overview.TotalStars)
+	assert.Equal(t, int64(75), response.Overview.AvgStars)
+	assert.NotEmpty(t, response.TopTags)
+	assert.NotEmpty(t, response.Insights)
+}
+
+func TestAnalyzeToolOverlap(t *testing.T) {
+	t.Parallel()
+
+	server1 := upstreamv0.ServerJSON{
+		Name:    "io.test/server1",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tools": []any{"query", "insert", "delete"},
+					},
+				},
+			},
+		},
+	}
+
+	server2 := upstreamv0.ServerJSON{
+		Name:    "io.test/server2",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tools": []any{"query", "insert", "update"},
+					},
+				},
+			},
+		},
+	}
+
+	server3 := upstreamv0.ServerJSON{
+		Name:    "io.test/server3",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tools": []any{"read", "write"},
+					},
+				},
+			},
+		},
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/v0/servers/io.test/server1/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": server1})
+		case "/v0/servers/io.test/server2/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": server2})
+		case "/v0/servers/io.test/server3/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": server3})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &AnalyzeToolOverlapParams{
+		ServerNames: []string{"io.test/server1", "io.test/server2", "io.test/server3"},
+		ShowUnique:  true,
+	}
+
+	result, _, err := mcpServer.analyzeToolOverlap(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+
+	var response struct {
+		Servers []struct {
+			ServerName  string   `json:"serverName"`
+			TotalTools  int      `json:"totalTools"`
+			UniqueTools []string `json:"uniqueTools"`
+		} `json:"servers"`
+		OverlapMatrix []struct {
+			ServerA string  `json:"serverA"`
+			ServerB string  `json:"serverB"`
+			Overlap float64 `json:"overlapScore"`
+			Shared  int     `json:"sharedTools"`
+		} `json:"overlapMatrix"`
+		Summary struct {
+			TotalServers     int `json:"totalServers"`
+			TotalUniqueTools int `json:"totalUniqueTools"`
+		} `json:"summary"`
+		Insights []string `json:"insights"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, response.Summary.TotalServers)
+	assert.Equal(t, 3, len(response.Servers))
+	assert.NotEmpty(t, response.OverlapMatrix)
+	assert.NotEmpty(t, response.Insights)
+
+	// Verify server1 and server2 have higher overlap than server1 and server3
+	var overlap12, overlap13 float64
+	for _, entry := range response.OverlapMatrix {
+		if (entry.ServerA == "io.test/server1" && entry.ServerB == "io.test/server2") ||
+			(entry.ServerA == "io.test/server2" && entry.ServerB == "io.test/server1") {
+			overlap12 = entry.Overlap
+		}
+		if (entry.ServerA == "io.test/server1" && entry.ServerB == "io.test/server3") ||
+			(entry.ServerA == "io.test/server3" && entry.ServerB == "io.test/server1") {
+			overlap13 = entry.Overlap
+		}
+	}
+
+	assert.Greater(t, overlap12, overlap13, "server1 and server2 should have more overlap than server1 and server3")
+}

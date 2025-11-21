@@ -36,12 +36,14 @@ The ToolHive Registry MCP Server (`thv-registry-mcp`) provides an MCP (Model Con
 │  │  • Automatic schema generation                       │   │
 │  └──────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  MCP Tools (5 tools, ~1400 lines)                    │   │
-│  │  • search_servers (unified search/filter/list)       │   │
-│  │  • get_server_details                                │   │
-│  │  • compare_servers                                   │   │
-│  │  • get_setup_guide (Journey 1)                       │   │
-│  │  • find_alternatives (Journey 1)                     │   │
+│  │  MCP Tools (9 tools, ~2500 lines)                    │   │
+│  │  Journey 1 (Consumer):                               │   │
+│  │  • search_servers, get_server_details,              │   │
+│  │    compare_servers, get_setup_guide,                │   │
+│  │    find_alternatives                                  │   │
+│  │  Journey 2 (Developer):                              │   │
+│  │  • find_similar_servers, get_server_analytics,      │   │
+│  │    get_ecosystem_insights, analyze_tool_overlap     │   │
 │  └──────────────────────────────────────────────────────┘   │
 └────────────────────────┬────────────────────────────────────┘
                          │ REST API (HTTP)
@@ -75,7 +77,7 @@ internal/mcp/              # MCP implementation (SDK-based)
 
 ### MCP Tools
 
-The server exposes 5 powerful tools for AI assistants:
+The server exposes 9 powerful tools for AI assistants (5 for Journey 1, 4 for Journey 2):
 
 #### 1. `search_servers`
 
@@ -378,20 +380,263 @@ Find alternative MCP servers with similar capabilities using heuristic similarit
 - Finding feature-rich alternatives
 - Exploring the ecosystem
 
+### Journey 2: MCP Developer Tools
+
+#### 6. `find_similar_servers`
+
+Find servers with similar capabilities for market research and competition analysis.
+
+**Parameters:**
+- `server_name` (string, optional): Find servers similar to this one
+- `tags` (array, optional): Find servers with these tags
+- `tools` (array, optional): Find servers with these tools
+- `limit` (number, optional): Max results (default: 10, max: 50)
+
+**Example Queries:**
+
+*Find servers similar to a specific server:*
+```json
+{
+  "server_name": "io.example/my-server",
+  "limit": 10
+}
+```
+
+*Find servers by capabilities:*
+```json
+{
+  "tags": ["database", "sql"],
+  "tools": ["query", "execute"],
+  "limit": 20
+}
+```
+
+**Response:** Returns JSON with similarity-ranked servers:
+```json
+{
+  "servers": [
+    {
+      "server": { /* ServerResponse */ },
+      "similarityScore": 0.82,
+      "matchReasons": ["tags: database, sql", "tools: 2/2"]
+    }
+  ],
+  "metadata": {
+    "count": 10,
+    "searchCriteria": "similar to io.example/my-server"
+  }
+}
+```
+
+**Use Cases:**
+- Market research and competitive analysis
+- Discovering similar implementations
+- Finding servers in the same category
+- Understanding the competitive landscape
+
+#### 7. `get_server_analytics`
+
+Get analytics and popularity metrics for your MCP server.
+
+**Parameters:**
+- `server_name` (string, required): Server to analyze
+- `period` (string, optional): Time period: "7d", "30d", "90d", "all" (default: "30d")
+
+**Example Query:**
+```json
+{
+  "server_name": "io.example/my-server",
+  "period": "30d"
+}
+```
+
+**Response:** Returns comprehensive analytics:
+```json
+{
+  "serverName": "io.example/my-server",
+  "period": "30d",
+  "current": {
+    "stars": 150,
+    "pulls": 500,
+    "toolCount": 5,
+    "tags": ["database", "sql"]
+  },
+  "popularity": {
+    "rank": "Medium",
+    "percentile": "Top 40%",
+    "comparedTo": "all registered MCP servers"
+  },
+  "recommendations": [
+    "Consider adding more descriptive tags to improve discoverability"
+  ]
+}
+```
+
+**Metrics Provided:**
+- Current stars, pulls, tool count
+- Popularity ranking and percentile
+- Actionable recommendations for improvement
+
+**Note:** Time-series trend data will be available when historical tracking is implemented.
+
+**Use Cases:**
+- Track server adoption and growth
+- Understand your server's market position
+- Get recommendations for improvement
+- Benchmark against the ecosystem
+
+#### 8. `get_ecosystem_insights`
+
+Get insights about the MCP ecosystem or a specific category.
+
+**Parameters:**
+- `category` (string, optional): Category to analyze: "database", "files", "api", "all" (default: "all")
+
+**Example Queries:**
+
+*Analyze entire ecosystem:*
+```json
+{
+  "category": "all"
+}
+```
+
+*Analyze database category:*
+```json
+{
+  "category": "database"
+}
+```
+
+**Response:** Returns ecosystem statistics and insights:
+```json
+{
+  "category": "all",
+  "overview": {
+    "totalServers": 250,
+    "totalStars": 15000,
+    "totalPulls": 45000,
+    "avgStars": 60,
+    "avgPulls": 180
+  },
+  "topTags": [
+    {"name": "database", "count": 45},
+    {"name": "api", "count": 38}
+  ],
+  "topTools": [
+    {"name": "query", "count": 52},
+    {"name": "search", "count": 41}
+  ],
+  "transports": [
+    {"name": "stdio", "count": 150},
+    {"name": "http", "count": 75}
+  ],
+  "runtimes": [
+    {"name": "node", "count": 120},
+    {"name": "python", "count": 85}
+  ],
+  "insights": [
+    "Most popular transport: stdio (150 servers)",
+    "Most common runtime: node (120 servers)"
+  ],
+  "opportunities": [
+    "Areas with fewer than 5 servers represent opportunities"
+  ]
+}
+```
+
+**Insights Provided:**
+- Total servers, stars, and pulls in category
+- Most popular tags, tools, transports, runtimes
+- Average engagement metrics
+- Underserved areas and opportunities
+
+**Use Cases:**
+- Strategic planning for new servers
+- Identify market gaps and opportunities
+- Understand ecosystem trends
+- Category-specific analysis
+
+#### 9. `analyze_tool_overlap`
+
+Analyze tool overlap between multiple servers to identify complementary vs competing servers.
+
+**Parameters:**
+- `server_names` (array, required): Servers to analyze (2-10 servers)
+- `show_unique` (boolean, optional): Show unique tools per server (default: true)
+
+**Example Query:**
+```json
+{
+  "server_names": [
+    "io.example/server1",
+    "io.example/server2",
+    "io.example/server3"
+  ],
+  "show_unique": true
+}
+```
+
+**Response:** Returns overlap analysis:
+```json
+{
+  "servers": [
+    {
+      "serverName": "io.example/server1",
+      "totalTools": 5,
+      "uniqueTools": ["special_query"]
+    }
+  ],
+  "overlapMatrix": [
+    {
+      "serverA": "io.example/server1",
+      "serverB": "io.example/server2",
+      "overlapScore": 0.67,
+      "sharedTools": 2
+    }
+  ],
+  "summary": {
+    "totalServers": 3,
+    "totalUniqueTools": 8,
+    "avgOverlap": 0.45
+  },
+  "insights": [
+    "Moderate overlap - some shared functionality with unique features",
+    "Highest overlap: server1 ↔ server2 (67% similar, 2 shared tools)"
+  ]
+}
+```
+
+**Analysis Provided:**
+- Overlap matrix (Jaccard similarity scores)
+- Unique tools per server
+- Shared tool counts
+- Insights on complementary vs competing servers
+
+**Use Cases:**
+- Identify competing servers
+- Find complementary servers for partnerships
+- Avoid feature duplication
+- Plan server differentiation strategy
+
 ### When to Use Each Tool
 
 Choose the right tool for your use case:
 
-| Need | Tool | Reason |
-|------|------|--------|
-| Quick search, preview results | `search_servers` (no cursor) | Fast, 20 results, <500ms |
-| Filtered complete results | `search_servers` (iterate with cursor) | Controlled pagination, agent-friendly |
-| ALL servers, no filter | `search_servers` (iterate to completion) | Use cursor to fetch all pages |
-| Single page with many filters | `search_servers` + `limit` | One-shot filtered query |
-| Detailed info on one server | `get_server_details` | Full metadata, packages, tags |
-| Side-by-side comparison | `compare_servers` | Compare features across 2-5 servers |
-| Installation instructions | `get_setup_guide` | Step-by-step setup, platform configs, troubleshooting |
-| Find similar servers | `find_alternatives` | Discover alternatives with similarity scores |
+| Need | Tool | Journey | Reason |
+|------|------|---------|--------|
+| Quick search, preview results | `search_servers` (no cursor) | 1 (Consumer) | Fast, 20 results, <500ms |
+| Filtered complete results | `search_servers` (iterate with cursor) | 1 (Consumer) | Controlled pagination, agent-friendly |
+| ALL servers, no filter | `search_servers` (iterate to completion) | 1 (Consumer) | Use cursor to fetch all pages |
+| Single page with many filters | `search_servers` + `limit` | 1 (Consumer) | One-shot filtered query |
+| Detailed info on one server | `get_server_details` | 1 (Consumer) | Full metadata, packages, tags |
+| Side-by-side comparison | `compare_servers` | 1 (Consumer) | Compare features across 2-5 servers |
+| Installation instructions | `get_setup_guide` | 1 (Consumer) | Step-by-step setup, platform configs, troubleshooting |
+| Find migration alternatives | `find_alternatives` | 1 (Consumer) | Discover alternatives with similarity scores |
+| Market research | `find_similar_servers` | 2 (Developer) | Find competing/similar servers with match reasons |
+| Track server performance | `get_server_analytics` | 2 (Developer) | Stars, pulls, popularity rank, recommendations |
+| Understand ecosystem | `get_ecosystem_insights` | 2 (Developer) | Category statistics, top tags/tools, opportunities |
+| Analyze competition | `analyze_tool_overlap` | 2 (Developer) | Tool overlap matrix, unique features, insights |
 
 ### Response Format
 
@@ -824,13 +1069,57 @@ This section demonstrates complete workflows for different user personas using t
 }
 ```
 
-### Journey 2: MCP Developer (Future)
+### Journey 2: MCP Developer
 
-**Coming soon** - Tools for MCP server authors:
-- `find_similar_servers` - Market research and competition analysis
-- `get_server_analytics` - Track adoption and download trends
-- `get_ecosystem_insights` - Category statistics and market gaps
-- `analyze_tool_overlap` - Find complementary vs competing servers
+Tools for MCP server authors and developers:
+
+#### Example Queries
+
+**Market Research:**
+> "What other database MCP servers exist? Show me similar implementations."
+
+Uses: `find_similar_servers` with tags/tools, or by reference server
+
+**Track Your Server:**
+> "How is my server 'io.example/my-db-server' performing? What's its popularity rank?"
+
+Uses: `get_server_analytics`
+
+**Ecosystem Analysis:**
+> "What's the landscape for database MCP servers? Are there opportunities?"
+
+Uses: `get_ecosystem_insights` with category filter
+
+**Competitive Analysis:**
+> "Compare tool overlap between my server and the top 3 database servers. What unique features do I have?"
+
+Uses: `analyze_tool_overlap` with your server and competitors
+
+**Feature Planning:**
+> "What tools are most common in successful database servers?"
+
+Uses: `get_ecosystem_insights` for top tools by category
+
+#### MCP Tool Flow for Journey 2
+
+```
+Developer Question
+       ↓
+1. find_similar_servers → Discover competitors
+       ↓
+2. get_server_analytics → Track performance
+       ↓
+3. get_ecosystem_insights → Understand market
+       ↓
+4. analyze_tool_overlap → Identify differentiation
+```
+
+**Key Features:**
+- Similarity scoring based on tags, tools, and metadata
+- Derived analytics from current snapshot data
+- Ecosystem-wide statistics and trends
+- Tool overlap analysis with unique feature detection
+- Actionable insights and recommendations
 
 ### Journey 3: Power User (Future)
 

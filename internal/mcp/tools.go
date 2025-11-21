@@ -78,6 +78,33 @@ type FindAlternativesParams struct {
 	Limit      int    `json:"limit,omitempty" jsonschema:"Max alternatives (default: 5, max: 20)"`
 }
 
+// Journey 2: MCP Developer Tools
+
+// FindSimilarServersParams defines parameters for the find_similar_servers tool
+type FindSimilarServersParams struct {
+	ServerName string   `json:"server_name,omitempty" jsonschema:"Find servers similar to this one"`
+	Tags       []string `json:"tags,omitempty" jsonschema:"Find servers with these tags"`
+	Tools      []string `json:"tools,omitempty" jsonschema:"Find servers with these tools"`
+	Limit      int      `json:"limit,omitempty" jsonschema:"Max results (default: 10, max: 50)"`
+}
+
+// GetServerAnalyticsParams defines parameters for the get_server_analytics tool
+type GetServerAnalyticsParams struct {
+	ServerName string `json:"server_name" jsonschema:"required,Server to analyze"`
+	Period     string `json:"period,omitempty" jsonschema:"Time period: 7d, 30d, 90d, all (default: 30d)"`
+}
+
+// GetEcosystemInsightsParams defines parameters for the get_ecosystem_insights tool
+type GetEcosystemInsightsParams struct {
+	Category string `json:"category,omitempty" jsonschema:"Category to analyze: database, files, api, all (default: all)"`
+}
+
+// AnalyzeToolOverlapParams defines parameters for the analyze_tool_overlap tool
+type AnalyzeToolOverlapParams struct {
+	ServerNames []string `json:"server_names" jsonschema:"required,Servers to analyze (2-10 servers)"`
+	ShowUnique  bool     `json:"show_unique,omitempty" jsonschema:"Show unique tools per server (default: true)"`
+}
+
 // EnvVar represents an environment variable requirement
 type EnvVar struct {
 	Name        string `json:"name"`
@@ -85,6 +112,12 @@ type EnvVar struct {
 	Required    bool   `json:"required"`
 	Example     string `json:"example"`
 	Source      string `json:"source"` // "metadata", "derived", "convention"
+}
+
+// FreqItem represents a frequency count for ecosystem insights
+type FreqItem struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 // ToolHive metadata extraction helpers
@@ -1336,6 +1369,652 @@ func (s *Server) findAlternatives(
 	// TODO: Add semantic similarity using embeddings
 	// TODO: Include user reviews/ratings when available
 	// TODO: Fetch real-time download stats for popularity
+
+	// Return as JSON
+	jsonBytes, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to serialize response: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(jsonBytes)}},
+	}, nil, nil
+}
+
+// Journey 2: MCP Developer Tool Handlers
+
+// findSimilarServers implements the find_similar_servers tool
+//
+//nolint:gocyclo // Journey 2 tool with multiple search paths and scoring logic
+func (s *Server) findSimilarServers(
+	ctx context.Context, _ *sdkmcp.CallToolRequest, params *FindSimilarServersParams,
+) (*sdkmcp.CallToolResult, any, error) {
+	limit := params.Limit
+	if limit == 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	// Fetch all servers
+	allServers, err := s.listServersFromAPI(ctx, url.Values{})
+	if err != nil {
+		logger.Errorf("Failed to fetch servers from API: %v", err)
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to fetch servers: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	var sourceServer *upstreamv0.ServerJSON
+
+	// Determine search criteria
+	if params.ServerName != "" {
+		// Find similar to a specific server
+		srv, err := s.getServerFromAPI(ctx, params.ServerName)
+		if err != nil {
+			logger.Errorf("Failed to get server %s from API: %v", params.ServerName, err)
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", params.ServerName)}},
+				IsError: true,
+			}, nil, nil
+		}
+		sourceServer = &srv
+	}
+
+	// Calculate similarity scores
+	type ScoredServer struct {
+		Server          upstreamv0.ServerResponse
+		SimilarityScore float64
+		MatchReasons    []string
+	}
+
+	similar := []ScoredServer{}
+
+	for _, serverResp := range allServers.Servers {
+		var score float64
+		var reasons []string
+
+		if sourceServer != nil {
+			// Similarity to reference server
+			if serverResp.Server.Name == sourceServer.Name {
+				continue // Skip the source server itself
+			}
+			score = calculateSimilarityScore(*sourceServer, serverResp.Server)
+			reasons = generateMatchReasons(*sourceServer, serverResp.Server)
+		} else {
+			// Match based on provided tags/tools
+			tagScore := 0.0
+			toolScore := 0.0
+
+			if len(params.Tags) > 0 {
+				serverTags := extractTags(serverResp.Server)
+				tagScore = scoreTagOverlap(params.Tags, serverTags)
+			}
+
+			if len(params.Tools) > 0 {
+				serverTools := extractTools(serverResp.Server)
+				toolScore = scoreToolOverlap(params.Tools, serverTools)
+			}
+
+			// Weight: tags 50%, tools 50% when searching by criteria
+			if len(params.Tags) > 0 && len(params.Tools) > 0 {
+				score = (tagScore * 0.5) + (toolScore * 0.5)
+			} else if len(params.Tags) > 0 {
+				score = tagScore
+			} else if len(params.Tools) > 0 {
+				score = toolScore
+			} else {
+				continue // No criteria provided
+			}
+
+			// Generate reasons
+			if tagScore > 0 {
+				matchedTags := []string{}
+				serverTags := extractTags(serverResp.Server)
+				tagMap := make(map[string]bool)
+				for _, tag := range serverTags {
+					tagMap[strings.ToLower(tag)] = true
+				}
+				for _, tag := range params.Tags {
+					if tagMap[strings.ToLower(tag)] {
+						matchedTags = append(matchedTags, tag)
+					}
+				}
+				if len(matchedTags) > 0 {
+					reasons = append(reasons, fmt.Sprintf("tags: %s", strings.Join(matchedTags, ", ")))
+				}
+			}
+
+			if toolScore > 0 {
+				matchedTools := 0
+				serverTools := extractTools(serverResp.Server)
+				toolMap := make(map[string]bool)
+				for _, tool := range serverTools {
+					toolMap[strings.ToLower(tool)] = true
+				}
+				for _, tool := range params.Tools {
+					if toolMap[strings.ToLower(tool)] {
+						matchedTools++
+					}
+				}
+				if matchedTools > 0 {
+					reasons = append(reasons, fmt.Sprintf("tools: %d/%d", matchedTools, len(params.Tools)))
+				}
+			}
+		}
+
+		// Only include servers with meaningful similarity (> 0.1)
+		if score > 0.1 {
+			similar = append(similar, ScoredServer{
+				Server:          serverResp,
+				SimilarityScore: score,
+				MatchReasons:    reasons,
+			})
+		}
+	}
+
+	// Sort by similarity score descending
+	sort.Slice(similar, func(i, j int) bool {
+		return similar[i].SimilarityScore > similar[j].SimilarityScore
+	})
+
+	// Limit results
+	if len(similar) > limit {
+		similar = similar[:limit]
+	}
+
+	// Build response
+	type SimilarServerResponse struct {
+		Server          upstreamv0.ServerResponse `json:"server"`
+		SimilarityScore float64                   `json:"similarityScore"`
+		MatchReasons    []string                  `json:"matchReasons"`
+	}
+
+	response := struct {
+		Servers  []SimilarServerResponse `json:"servers"`
+		Metadata struct {
+			Count          int    `json:"count"`
+			SearchCriteria string `json:"searchCriteria"`
+		} `json:"metadata"`
+	}{
+		Servers: make([]SimilarServerResponse, len(similar)),
+	}
+
+	for i, sim := range similar {
+		response.Servers[i] = SimilarServerResponse(sim)
+	}
+
+	response.Metadata.Count = len(similar)
+	if sourceServer != nil {
+		response.Metadata.SearchCriteria = fmt.Sprintf("similar to %s", sourceServer.Name)
+	} else if len(params.Tags) > 0 && len(params.Tools) > 0 {
+		response.Metadata.SearchCriteria = fmt.Sprintf("tags: %s, tools: %s",
+			strings.Join(params.Tags, ", "), strings.Join(params.Tools, ", "))
+	} else if len(params.Tags) > 0 {
+		response.Metadata.SearchCriteria = fmt.Sprintf("tags: %s", strings.Join(params.Tags, ", "))
+	} else if len(params.Tools) > 0 {
+		response.Metadata.SearchCriteria = fmt.Sprintf("tools: %s", strings.Join(params.Tools, ", "))
+	}
+
+	// Return as JSON
+	jsonBytes, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to serialize response: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(jsonBytes)}},
+	}, nil, nil
+}
+
+// getServerAnalytics implements the get_server_analytics tool
+func (s *Server) getServerAnalytics(
+	ctx context.Context, _ *sdkmcp.CallToolRequest, params *GetServerAnalyticsParams,
+) (*sdkmcp.CallToolResult, any, error) {
+	serverName := params.ServerName
+	period := params.Period
+	if period == "" {
+		period = "30d"
+	}
+
+	// Get server from Registry API
+	server, err := s.getServerFromAPI(ctx, serverName)
+	if err != nil {
+		logger.Errorf("Failed to get server %s from API: %v", serverName, err)
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", serverName)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	// Extract current metrics
+	stars := extractStars(server)
+	pulls := extractPulls(server)
+	tools := extractTools(server)
+	tags := extractTags(server)
+
+	// Build analytics response with derived data
+	response := struct {
+		ServerName string `json:"serverName"`
+		Period     string `json:"period"`
+		Current    struct {
+			Stars int64    `json:"stars"`
+			Pulls int64    `json:"pulls"`
+			Tools int      `json:"toolCount"`
+			Tags  []string `json:"tags"`
+		} `json:"current"`
+		Trends struct {
+			Message string `json:"message"`
+			// TODO: Add real-time series data when available
+			StarsGrowth string `json:"starsGrowth,omitempty"`
+			PullsGrowth string `json:"pullsGrowth,omitempty"`
+		} `json:"trends"`
+		Popularity struct {
+			Rank       string `json:"rank"`
+			Percentile string `json:"percentile"`
+			ComparedTo string `json:"comparedTo"`
+		} `json:"popularity"`
+		Recommendations []string `json:"recommendations"`
+	}{
+		ServerName: serverName,
+		Period:     period,
+	}
+
+	response.Current.Stars = stars
+	response.Current.Pulls = pulls
+	response.Current.Tools = len(tools)
+	response.Current.Tags = tags
+
+	// Derive popularity rank (placeholder logic based on stars)
+	if stars > 1000 {
+		response.Popularity.Rank = "Top Tier"
+		response.Popularity.Percentile = "Top 5%"
+	} else if stars > 500 {
+		response.Popularity.Rank = "High"
+		response.Popularity.Percentile = "Top 15%"
+	} else if stars > 100 {
+		response.Popularity.Rank = "Medium"
+		response.Popularity.Percentile = "Top 40%"
+	} else {
+		response.Popularity.Rank = "Growing"
+		response.Popularity.Percentile = "Emerging"
+	}
+	response.Popularity.ComparedTo = "all registered MCP servers"
+
+	// TODO: Calculate real trends when time-series data is available
+	response.Trends.Message = "Historical trend data not yet available. Showing current snapshot."
+
+	// Generate recommendations
+	if stars < 50 {
+		response.Recommendations = append(response.Recommendations, "Consider promoting your server on GitHub and social media")
+	}
+	if len(tools) < 3 {
+		response.Recommendations = append(response.Recommendations, "Adding more tools could increase adoption")
+	}
+	if len(tags) < 3 {
+		response.Recommendations = append(response.Recommendations, "Add more descriptive tags to improve discoverability")
+	}
+	if len(server.Packages) == 0 {
+		response.Recommendations = append(response.Recommendations, "Add package information to make installation easier")
+	}
+
+	// Return as JSON
+	jsonBytes, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to serialize response: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(jsonBytes)}},
+	}, nil, nil
+}
+
+// getEcosystemInsights implements the get_ecosystem_insights tool
+//
+//nolint:gocyclo // Journey 2 tool with ecosystem analysis and aggregation logic
+func (s *Server) getEcosystemInsights(
+	ctx context.Context, _ *sdkmcp.CallToolRequest, params *GetEcosystemInsightsParams,
+) (*sdkmcp.CallToolResult, any, error) {
+	category := params.Category
+	if category == "" {
+		category = "all"
+	}
+
+	// Fetch all servers
+	allServers, err := s.listServersFromAPI(ctx, url.Values{})
+	if err != nil {
+		logger.Errorf("Failed to fetch servers from API: %v", err)
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to fetch servers: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	// Analyze ecosystem
+	tagFrequency := make(map[string]int)
+	toolFrequency := make(map[string]int)
+	transportFrequency := make(map[string]int)
+	runtimeFrequency := make(map[string]int)
+	totalStars := int64(0)
+	totalPulls := int64(0)
+
+	filteredServers := []upstreamv0.ServerResponse{}
+
+	for _, serverResp := range allServers.Servers {
+		// Filter by category if specified
+		if category != "all" {
+			tags := extractTags(serverResp.Server)
+			matchesCategory := false
+			categoryLower := strings.ToLower(category)
+			for _, tag := range tags {
+				if strings.Contains(strings.ToLower(tag), categoryLower) {
+					matchesCategory = true
+					break
+				}
+			}
+			if !matchesCategory {
+				continue
+			}
+		}
+
+		filteredServers = append(filteredServers, serverResp)
+
+		// Collect statistics
+		tags := extractTags(serverResp.Server)
+		for _, tag := range tags {
+			tagFrequency[tag]++
+		}
+
+		tools := extractTools(serverResp.Server)
+		for _, tool := range tools {
+			toolFrequency[tool]++
+		}
+
+		if len(serverResp.Server.Packages) > 0 {
+			pkg := serverResp.Server.Packages[0]
+			transportFrequency[pkg.Transport.Type]++
+			runtime := detectRuntime(serverResp.Server)
+			if runtime != registryTypeUnknown {
+				runtimeFrequency[runtime]++
+			}
+		}
+
+		totalStars += extractStars(serverResp.Server)
+		totalPulls += extractPulls(serverResp.Server)
+	}
+
+	// Find top items
+	topTags := getTopN(tagFrequency, 10)
+	topTools := getTopN(toolFrequency, 10)
+	topTransports := getTopN(transportFrequency, 5)
+	topRuntimes := getTopN(runtimeFrequency, 5)
+
+	// Build response
+	response := struct {
+		Category string `json:"category"`
+		Overview struct {
+			TotalServers int   `json:"totalServers"`
+			TotalStars   int64 `json:"totalStars"`
+			TotalPulls   int64 `json:"totalPulls"`
+			AvgStars     int64 `json:"avgStars"`
+			AvgPulls     int64 `json:"avgPulls"`
+		} `json:"overview"`
+		TopTags       []FreqItem `json:"topTags"`
+		TopTools      []FreqItem `json:"topTools"`
+		Transports    []FreqItem `json:"transports"`
+		Runtimes      []FreqItem `json:"runtimes"`
+		Insights      []string   `json:"insights"`
+		Opportunities []string   `json:"opportunities"`
+	}{
+		Category:   category,
+		TopTags:    topTags,
+		TopTools:   topTools,
+		Transports: topTransports,
+		Runtimes:   topRuntimes,
+	}
+
+	response.Overview.TotalServers = len(filteredServers)
+	response.Overview.TotalStars = totalStars
+	response.Overview.TotalPulls = totalPulls
+	if len(filteredServers) > 0 {
+		response.Overview.AvgStars = totalStars / int64(len(filteredServers))
+		response.Overview.AvgPulls = totalPulls / int64(len(filteredServers))
+	}
+
+	// Generate insights
+	if len(topTransports) > 0 {
+		response.Insights = append(response.Insights,
+			fmt.Sprintf("Most popular transport: %s (%d servers)", topTransports[0].Name, topTransports[0].Count))
+	}
+	if len(topRuntimes) > 0 {
+		response.Insights = append(response.Insights,
+			fmt.Sprintf("Most common runtime: %s (%d servers)", topRuntimes[0].Name, topRuntimes[0].Count))
+	}
+	if len(topTags) > 0 {
+		response.Insights = append(response.Insights,
+			fmt.Sprintf("Most popular category: %s (%d servers)", topTags[0].Name, topTags[0].Count))
+	}
+
+	// Identify opportunities (underserved areas)
+	response.Opportunities = append(response.Opportunities,
+		"Areas with fewer than 5 servers represent opportunities for new implementations")
+
+	// TODO: Add real trend analysis when time-series data is available
+	response.Opportunities = append(response.Opportunities,
+		"Growth trends and emerging categories will be available with historical data")
+
+	// Return as JSON
+	jsonBytes, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to serialize response: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(jsonBytes)}},
+	}, nil, nil
+}
+
+// getTopN returns top N items from a frequency map
+func getTopN(freq map[string]int, n int) []FreqItem {
+	items := make([]FreqItem, 0, len(freq))
+	for name, count := range freq {
+		items = append(items, FreqItem{Name: name, Count: count})
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Count > items[j].Count
+	})
+
+	if len(items) > n {
+		items = items[:n]
+	}
+
+	return items
+}
+
+// analyzeToolOverlap implements the analyze_tool_overlap tool
+//
+//nolint:gocyclo // Journey 2 tool with overlap matrix calculation and unique tool detection
+func (s *Server) analyzeToolOverlap(
+	ctx context.Context, _ *sdkmcp.CallToolRequest, params *AnalyzeToolOverlapParams,
+) (*sdkmcp.CallToolResult, any, error) {
+	serverNames := params.ServerNames
+
+	if len(serverNames) < 2 || len(serverNames) > 10 {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "Error: provide between 2 and 10 servers to analyze"}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	// Fetch all servers
+	servers := make([]upstreamv0.ServerJSON, 0, len(serverNames))
+	for _, name := range serverNames {
+		server, err := s.getServerFromAPI(ctx, name)
+		if err != nil {
+			logger.Errorf("Failed to get server %s from API: %v", name, err)
+			return &sdkmcp.CallToolResult{
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", name)}},
+				IsError: true,
+			}, nil, nil
+		}
+		servers = append(servers, server)
+	}
+
+	// Extract tools for each server
+	serverTools := make(map[string][]string)
+	allTools := make(map[string]bool)
+
+	for _, server := range servers {
+		tools := extractTools(server)
+		serverTools[server.Name] = tools
+		for _, tool := range tools {
+			allTools[tool] = true
+		}
+	}
+
+	// Calculate overlap matrix
+	type OverlapEntry struct {
+		ServerA string  `json:"serverA"`
+		ServerB string  `json:"serverB"`
+		Overlap float64 `json:"overlapScore"`
+		Shared  int     `json:"sharedTools"`
+	}
+
+	overlapMatrix := []OverlapEntry{}
+	for i, serverA := range servers {
+		for j, serverB := range servers {
+			if i < j {
+				toolsA := serverTools[serverA.Name]
+				toolsB := serverTools[serverB.Name]
+				score := scoreToolOverlap(toolsA, toolsB)
+
+				// Count shared tools
+				shared := 0
+				toolMapA := make(map[string]bool)
+				for _, tool := range toolsA {
+					toolMapA[strings.ToLower(tool)] = true
+				}
+				for _, tool := range toolsB {
+					if toolMapA[strings.ToLower(tool)] {
+						shared++
+					}
+				}
+
+				overlapMatrix = append(overlapMatrix, OverlapEntry{
+					ServerA: serverA.Name,
+					ServerB: serverB.Name,
+					Overlap: score,
+					Shared:  shared,
+				})
+			}
+		}
+	}
+
+	// Sort by overlap score descending
+	sort.Slice(overlapMatrix, func(i, j int) bool {
+		return overlapMatrix[i].Overlap > overlapMatrix[j].Overlap
+	})
+
+	// Find unique tools per server if requested
+	type ServerToolInfo struct {
+		ServerName  string   `json:"serverName"`
+		TotalTools  int      `json:"totalTools"`
+		UniqueTools []string `json:"uniqueTools,omitempty"`
+	}
+
+	serverInfo := make([]ServerToolInfo, len(servers))
+	for i, server := range servers {
+		tools := serverTools[server.Name]
+		info := ServerToolInfo{
+			ServerName: server.Name,
+			TotalTools: len(tools),
+		}
+
+		if params.ShowUnique {
+			unique := []string{}
+			for _, tool := range tools {
+				// Check if tool is unique to this server
+				isUnique := true
+				for _, otherServer := range servers {
+					if otherServer.Name == server.Name {
+						continue
+					}
+					otherTools := serverTools[otherServer.Name]
+					toolMap := make(map[string]bool)
+					for _, t := range otherTools {
+						toolMap[strings.ToLower(t)] = true
+					}
+					if toolMap[strings.ToLower(tool)] {
+						isUnique = false
+						break
+					}
+				}
+				if isUnique {
+					unique = append(unique, tool)
+				}
+			}
+			info.UniqueTools = unique
+		}
+
+		serverInfo[i] = info
+	}
+
+	// Build response
+	response := struct {
+		Servers       []ServerToolInfo `json:"servers"`
+		OverlapMatrix []OverlapEntry   `json:"overlapMatrix"`
+		Summary       struct {
+			TotalServers     int     `json:"totalServers"`
+			TotalUniqueTools int     `json:"totalUniqueTools"`
+			AvgOverlap       float64 `json:"avgOverlap"`
+		} `json:"summary"`
+		Insights []string `json:"insights"`
+	}{
+		Servers:       serverInfo,
+		OverlapMatrix: overlapMatrix,
+	}
+
+	response.Summary.TotalServers = len(servers)
+	response.Summary.TotalUniqueTools = len(allTools)
+
+	if len(overlapMatrix) > 0 {
+		sum := 0.0
+		for _, entry := range overlapMatrix {
+			sum += entry.Overlap
+		}
+		response.Summary.AvgOverlap = sum / float64(len(overlapMatrix))
+	}
+
+	// Generate insights
+	if response.Summary.AvgOverlap > 0.7 {
+		response.Insights = append(response.Insights, "High overlap detected - servers are competing for similar use cases")
+	} else if response.Summary.AvgOverlap < 0.3 {
+		response.Insights = append(response.Insights, "Low overlap detected - servers are complementary and serve different needs")
+	} else {
+		response.Insights = append(response.Insights, "Moderate overlap - some shared functionality with unique features")
+	}
+
+	if len(overlapMatrix) > 0 {
+		highest := overlapMatrix[0]
+		response.Insights = append(response.Insights,
+			fmt.Sprintf("Highest overlap: %s ↔ %s (%.1f%% similar, %d shared tools)",
+				highest.ServerA, highest.ServerB, highest.Overlap*100, highest.Shared))
+	}
 
 	// Return as JSON
 	jsonBytes, err := json.MarshalIndent(response, "", "  ")

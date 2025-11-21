@@ -123,4 +123,34 @@ func (s *Server) registerTools() {
 		Description: "Find alternative MCP servers with similar capabilities based on tags, tools, and features. " +
 			"Returns similarity scores and migration complexity estimates.",
 	}, s.findAlternatives)
+
+	// Journey 2: MCP Developer Tools
+
+	// Register find_similar_servers tool
+	sdkmcp.AddTool(s.sdkServer, &sdkmcp.Tool{
+		Name: "find_similar_servers",
+		Description: "Find servers with similar capabilities for market research and competition analysis. " +
+			"Search by reference server, tags, or tools to discover similar implementations.",
+	}, s.findSimilarServers)
+
+	// Register get_server_analytics tool
+	sdkmcp.AddTool(s.sdkServer, &sdkmcp.Tool{
+		Name: "get_server_analytics",
+		Description: "Get analytics and popularity metrics for an MCP server. " +
+			"Shows current statistics, popularity ranking, and recommendations for improvement.",
+	}, s.getServerAnalytics)
+
+	// Register get_ecosystem_insights tool
+	sdkmcp.AddTool(s.sdkServer, &sdkmcp.Tool{
+		Name: "get_ecosystem_insights",
+		Description: "Get insights about the MCP ecosystem or a specific category. " +
+			"Shows top tags, tools, transports, runtimes, and identifies opportunities.",
+	}, s.getEcosystemInsights)
+
+	// Register analyze_tool_overlap tool
+	sdkmcp.AddTool(s.sdkServer, &sdkmcp.Tool{
+		Name: "analyze_tool_overlap",
+		Description: "Analyze tool overlap between multiple servers. " +
+			"Shows overlap matrix, unique tools per server, and identifies complementary vs competing servers.",
+	}, s.analyzeToolOverlap)
 }
