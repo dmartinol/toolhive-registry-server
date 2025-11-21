@@ -670,9 +670,9 @@ func (s *Server) getServerFromAPI(ctx context.Context, serverName string) (upstr
 		return s.localCache.GetServer(ctx, serverName)
 	}
 
-	// Try direct get endpoint first (for compatible registries)
+	// Use the official MCP Registry API endpoint: /v0/servers/{name}/versions/latest
 	encodedName := url.PathEscape(serverName)
-	reqURL := fmt.Sprintf("%s/v0/servers/%s", s.apiClient.BaseURL, encodedName)
+	reqURL := fmt.Sprintf("%s/v0/servers/%s/versions/latest", s.apiClient.BaseURL, encodedName)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
@@ -685,14 +685,14 @@ func (s *Server) getServerFromAPI(ctx context.Context, serverName string) (upstr
 	}
 	defer resp.Body.Close()
 
-	// If endpoint exists and returns success
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return upstreamv0.ServerJSON{}, fmt.Errorf("failed to read response: %w", err)
-		}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return upstreamv0.ServerJSON{}, fmt.Errorf("failed to read response: %w", err)
+	}
 
-		// Try official registry format first: { "server": {...} }
+	// If endpoint returns success
+	if resp.StatusCode == http.StatusOK {
+		// Official registry format: { "server": {...}, "_meta": {...} }
 		var officialFormat struct {
 			Server upstreamv0.ServerJSON `json:"server"`
 		}
@@ -700,7 +700,7 @@ func (s *Server) getServerFromAPI(ctx context.Context, serverName string) (upstr
 			return officialFormat.Server, nil
 		}
 
-		// Try direct server format: {...}
+		// Try direct server format: {...} (for backwards compatibility)
 		var server upstreamv0.ServerJSON
 		if err := json.Unmarshal(body, &server); err != nil {
 			return upstreamv0.ServerJSON{}, fmt.Errorf("failed to decode response (tried both formats): %w", err)
@@ -708,24 +708,6 @@ func (s *Server) getServerFromAPI(ctx context.Context, serverName string) (upstr
 		return server, nil
 	}
 
-	// If endpoint doesn't exist (404), fall back to listing all servers and filtering
-	// This handles registries like the official MCP registry that don't have a get-by-name endpoint
-	if resp.StatusCode == http.StatusNotFound {
-		listResp, err := s.listServersFromAPI(ctx, url.Values{})
-		if err != nil {
-			return upstreamv0.ServerJSON{}, fmt.Errorf("failed to list servers: %w", err)
-		}
-
-		// Find the server by name
-		for _, serverResp := range listResp.Servers {
-			if serverResp.Server.Name == serverName {
-				return serverResp.Server, nil
-			}
-		}
-		return upstreamv0.ServerJSON{}, fmt.Errorf("server not found: %s", serverName)
-	}
-
-	// Other error
-	body, _ := io.ReadAll(resp.Body)
-	return upstreamv0.ServerJSON{}, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	// Server not found or other error
+	return upstreamv0.ServerJSON{}, fmt.Errorf("server not found: %s (API returned status %d: %s)", serverName, resp.StatusCode, string(body))
 }

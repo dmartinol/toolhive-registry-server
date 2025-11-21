@@ -142,14 +142,14 @@ func TestHandleCompareServers(t *testing.T) {
 		},
 	}
 
-	// Create test HTTP server
+	// Create test HTTP server using the official MCP Registry API format
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/v0/servers/io.test/server1":
-			json.NewEncoder(w).Encode(server1)
-		case "/v0/servers/io.test/server2":
-			json.NewEncoder(w).Encode(server2)
+		case "/v0/servers/io.test/server1/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": server1})
+		case "/v0/servers/io.test/server2/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": server2})
 		default:
 			http.NotFound(w, r)
 		}
