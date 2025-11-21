@@ -36,10 +36,12 @@ The ToolHive Registry MCP Server (`thv-registry-mcp`) provides an MCP (Model Con
 │  │  • Automatic schema generation                       │   │
 │  └──────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  MCP Tools (3 tools, ~700 lines)                     │   │
+│  │  MCP Tools (5 tools, ~1400 lines)                    │   │
 │  │  • search_servers (unified search/filter/list)       │   │
 │  │  • get_server_details                                │   │
 │  │  • compare_servers                                   │   │
+│  │  • get_setup_guide (Journey 1)                       │   │
+│  │  • find_alternatives (Journey 1)                     │   │
 │  └──────────────────────────────────────────────────────┘   │
 └────────────────────────┬────────────────────────────────────┘
                          │ REST API (HTTP)
@@ -73,7 +75,7 @@ internal/mcp/              # MCP implementation (SDK-based)
 
 ### MCP Tools
 
-The server exposes 3 powerful tools for AI assistants:
+The server exposes 5 powerful tools for AI assistants:
 
 #### 1. `search_servers`
 
@@ -291,6 +293,91 @@ Compare multiple MCP servers side-by-side.
 
 **Note:** This tool returns a custom formatted text comparison table for better readability, while other tools return official JSON format.
 
+#### 4. `get_setup_guide`
+
+Get comprehensive installation and configuration instructions for an MCP server.
+
+**Parameters:**
+- `server_name` (string, required): Server to get setup guide for
+- `platform` (string, optional): Platform: "claude-desktop", "cursor", "custom" (default: "claude-desktop")
+- `runtime` (string, optional): Runtime: "node", "python", "docker" (auto-detected if not specified)
+
+**Example Query:**
+```json
+{
+  "server_name": "io.example/postgres-mcp",
+  "platform": "claude-desktop"
+}
+```
+
+**Response:** Returns a comprehensive markdown setup guide including:
+- Prerequisites (runtime, transport type)
+- Step-by-step installation instructions
+- Environment variable configuration
+- Platform-specific config examples (Claude Desktop, Cursor, custom)
+- Troubleshooting tips
+- Links to documentation and repository
+
+**Use Cases:**
+- First-time server installation
+- Switching between platforms (Claude Desktop ↔ Cursor)
+- Troubleshooting installation issues
+- Understanding environment variable requirements
+
+#### 5. `find_alternatives`
+
+Find alternative MCP servers with similar capabilities using heuristic similarity scoring.
+
+**Parameters:**
+- `server_name` (string, required): Find alternatives to this server
+- `reason` (string, optional): Why looking for alternative: "deprecated", "license", "features", "performance"
+- `limit` (number, optional): Max alternatives (default: 5, max: 20)
+
+**Example Query:**
+```json
+{
+  "server_name": "io.example/postgres-mcp",
+  "limit": 5
+}
+```
+
+**Response:** Returns JSON with similarity-ranked alternatives:
+```json
+{
+  "alternatives": [
+    {
+      "server": { /* ServerResponse */ },
+      "similarityScore": 0.85,
+      "matchReasons": ["shared tags: database, sql", "similar tools: 8/10"],
+      "migrationComplexity": "Low",
+      "differences": ["transport: stdio vs http"]
+    }
+  ],
+  "metadata": {
+    "count": 5,
+    "sourceServer": "io.example/postgres-mcp",
+    "scoringCriteria": "tags(40%), tools(40%), transport(10%), description(10%)"
+  }
+}
+```
+
+**Similarity Scoring:**
+- **Tags (40%)**: Shared tags indicate similar use cases (uses [Jaccard similarity](https://en.wikipedia.org/wiki/Jaccard_index): intersection/union)
+- **Tools (40%)**: Tool overlap shows functional equivalence (uses [Jaccard similarity](https://en.wikipedia.org/wiki/Jaccard_index): intersection/union)
+- **Transport (10%)**: Same transport means easier migration (binary match: 1.0 or 0.0)
+- **Description (10%)**: Keyword matching in descriptions (overlap coefficient)
+
+**Migration Complexity:**
+- **Low**: High tool overlap (≥80%), easy to switch
+- **Medium**: Moderate tool overlap (50-80%), some code changes needed
+- **High**: Low tool overlap (<50%), significant code changes required
+
+**Use Cases:**
+- Evaluating alternative implementations
+- Planning migration from deprecated servers
+- Finding feature-rich alternatives
+- Exploring the ecosystem
+
 ### When to Use Each Tool
 
 Choose the right tool for your use case:
@@ -303,6 +390,8 @@ Choose the right tool for your use case:
 | Single page with many filters | `search_servers` + `limit` | One-shot filtered query |
 | Detailed info on one server | `get_server_details` | Full metadata, packages, tags |
 | Side-by-side comparison | `compare_servers` | Compare features across 2-5 servers |
+| Installation instructions | `get_setup_guide` | Step-by-step setup, platform configs, troubleshooting |
+| Find similar servers | `find_alternatives` | Discover alternatives with similarity scores |
 
 ### Response Format
 
@@ -606,6 +695,150 @@ The MCP server excels at handling natural language queries:
   }
 }
 ```
+
+## User Journeys
+
+This section demonstrates complete workflows for different user personas using the MCP tools.
+
+### Journey 1: New MCP Consumer
+
+**Scenario**: A developer needs to connect to PostgreSQL and wants to find, evaluate, install, and explore alternatives.
+
+#### Step 1: Discovery
+
+*"I need to query a PostgreSQL database"*
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "search_servers",
+    "arguments": {
+      "query": "postgresql database",
+      "limit": 5,
+      "sort_by": "stars"
+    }
+  }
+}
+```
+
+**Response:** List of 5 postgres-related servers sorted by popularity...
+
+#### Step 2: Detailed Information
+
+*"Tell me about this postgres server"*
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "get_server_details",
+    "arguments": {
+      "server_name": "io.example/postgres-mcp"
+    }
+  }
+}
+```
+
+**Response:** Complete server details including packages, tools, metadata, repository info...
+
+#### Step 3: Installation Guide
+
+*"How do I install it in Claude Desktop?"*
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "get_setup_guide",
+    "arguments": {
+      "server_name": "io.example/postgres-mcp",
+      "platform": "claude-desktop"
+    }
+  }
+}
+```
+
+**Response:** Comprehensive markdown guide with:
+- Prerequisites and runtime detection
+- Installation commands (`npm install`, `npx` usage)
+- Environment variables (DATABASE_URL with examples)
+- Claude Desktop config snippet
+- Alternative platform configs (Cursor, custom)
+- Troubleshooting tips
+- Links to documentation
+
+#### Step 4: Explore Alternatives
+
+*"What are other postgres tools I should consider?"*
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "find_alternatives",
+    "arguments": {
+      "server_name": "io.example/postgres-mcp",
+      "limit": 5
+    }
+  }
+}
+```
+
+**Response:** JSON with ranked alternatives:
+```json
+{
+  "alternatives": [
+    {
+      "server": {
+        "name": "io.example/postgresql-connector",
+        "description": "Enhanced PostgreSQL MCP connector"
+      },
+      "similarityScore": 0.87,
+      "matchReasons": [
+        "shared tags: database, postgres, sql",
+        "similar tools: 9/10",
+        "same transport: stdio"
+      ],
+      "migrationComplexity": "Low",
+      "differences": ["more features: includes query builder"]
+    }
+  ],
+  "metadata": {
+    "count": 5,
+    "sourceServer": "io.example/postgres-mcp",
+    "scoringCriteria": "tags(40%), tools(40%), transport(10%), description(10%)"
+  }
+}
+```
+
+### Journey 2: MCP Developer (Future)
+
+**Coming soon** - Tools for MCP server authors:
+- `find_similar_servers` - Market research and competition analysis
+- `get_server_analytics` - Track adoption and download trends
+- `get_ecosystem_insights` - Category statistics and market gaps
+- `analyze_tool_overlap` - Find complementary vs competing servers
+
+### Journey 3: Power User (Future)
+
+**Coming soon** - Tools for workflow builders:
+- `suggest_workflow` - Curated server combinations for use cases
+- `get_integration_examples` - Code snippets for multi-server workflows
+- `assess_server_quality` - Quality scoring for decision-making
+- `check_compatibility` - Runtime/platform compatibility matrix
 
 ## ToolHive Metadata
 

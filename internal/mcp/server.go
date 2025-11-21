@@ -109,4 +109,18 @@ func (s *Server) registerTools() {
 		Name:        "compare_servers",
 		Description: "Compare multiple MCP servers side-by-side showing features, statistics, and differences.",
 	}, s.compareServers)
+
+	// Register get_setup_guide tool
+	sdkmcp.AddTool(s.sdkServer, &sdkmcp.Tool{
+		Name: "get_setup_guide",
+		Description: "Get step-by-step installation and configuration instructions for an MCP server. " +
+			"Provides platform-specific config examples, environment variable setup, and troubleshooting tips.",
+	}, s.getSetupGuide)
+
+	// Register find_alternatives tool
+	sdkmcp.AddTool(s.sdkServer, &sdkmcp.Tool{
+		Name: "find_alternatives",
+		Description: "Find alternative MCP servers with similar capabilities based on tags, tools, and features. " +
+			"Returns similarity scores and migration complexity estimates.",
+	}, s.findAlternatives)
 }

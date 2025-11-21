@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "toolhive-registry": {
+      "command": "/Users/dmartino/projects/AI/mcp/toolhive-registry-server/bin/thv-registry-mcp",
+      "args": [
+        "serve",
+        "--registry-url",
+        "https://registry.modelcontextprotocol.io",
+        "--transport",
+        "stdio"
+      ],
+      "description": "MCP Server connected to the official MCP Registry"
+    }
+  }
+}
+

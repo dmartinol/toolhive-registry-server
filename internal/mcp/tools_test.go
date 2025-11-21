@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -290,7 +291,7 @@ func TestSearchServers_WithCursorIteration(t *testing.T) {
 
 	// Create test HTTP server that simulates pagination
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v0/servers" {
+		if r.URL.Path == testServersPath {
 			w.Header().Set("Content-Type", "application/json")
 
 			cursor := r.URL.Query().Get("cursor")
@@ -574,3 +575,498 @@ func TestSearchServers_WithRegistryTypeFilter(t *testing.T) {
 }
 
 // TestHandleCompareServers_InvalidArgs removed - SDK validates parameters automatically via jsonschema
+
+// Journey 1 tool tests
+
+func TestGetSetupGuide_NPMPackage(t *testing.T) {
+	t.Parallel()
+
+	server := upstreamv0.ServerJSON{
+		Name:        "io.test/postgres-server",
+		Description: "PostgreSQL database server for MCP",
+		Version:     "1.0.0",
+		Repository: &model.Repository{
+			URL:    "https://github.com/test/postgres-server",
+			Source: "github",
+		},
+		Packages: []model.Package{
+			{
+				RegistryType: "npm",
+				Identifier:   "@test/postgres-mcp",
+				RunTimeHint:  "node",
+				Transport: model.Transport{
+					Type: "stdio",
+				},
+			},
+		},
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags": []any{"database", "postgres", "sql"},
+					},
+				},
+			},
+		},
+	}
+
+	// Create test HTTP server
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v0/servers/io.test/postgres-server/versions/latest" {
+			json.NewEncoder(w).Encode(map[string]any{"server": server})
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	// Create MCP server with test API URL
+	mcpServer := NewServer(testServer.URL)
+
+	params := &GetSetupGuideParams{
+		ServerName: "io.test/postgres-server",
+		Platform:   "claude-desktop",
+	}
+
+	result, _, err := mcpServer.getSetupGuide(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	assert.Len(t, result.Content, 1)
+
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+	guide := textContent.Text
+
+	// Verify guide contains key sections
+	assert.Contains(t, guide, "# Setup Guide: io.test/postgres-server")
+	assert.Contains(t, guide, "PostgreSQL database server for MCP")
+	assert.Contains(t, guide, "## Prerequisites")
+	assert.Contains(t, guide, "**Runtime**: node")
+	assert.Contains(t, guide, "**Transport**: stdio")
+	assert.Contains(t, guide, "## Installation")
+	assert.Contains(t, guide, "npm install -g @test/postgres-mcp")
+	assert.Contains(t, guide, "npx @test/postgres-mcp")
+	assert.Contains(t, guide, "## Environment Variables")
+	assert.Contains(t, guide, "DATABASE_URL")
+	assert.Contains(t, guide, "## Configuration")
+	assert.Contains(t, guide, "Claude Desktop Configuration")
+	assert.Contains(t, guide, "~/.config/claude/config.json")
+	assert.Contains(t, guide, "Cursor Configuration")
+	assert.Contains(t, guide, "## Troubleshooting")
+	assert.Contains(t, guide, "## Next Steps")
+	assert.Contains(t, guide, "https://github.com/test/postgres-server")
+}
+
+func TestGetSetupGuide_PythonPackage(t *testing.T) {
+	t.Parallel()
+
+	server := upstreamv0.ServerJSON{
+		Name:        "io.test/python-server",
+		Description: "Python-based MCP server",
+		Version:     "2.0.0",
+		Packages: []model.Package{
+			{
+				RegistryType: "pypi",
+				Identifier:   "python-mcp-server",
+				RunTimeHint:  "python",
+				Transport: model.Transport{
+					Type: "http",
+				},
+			},
+		},
+	}
+
+	// Create test HTTP server
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v0/servers/io.test/python-server/versions/latest" {
+			json.NewEncoder(w).Encode(map[string]any{"server": server})
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &GetSetupGuideParams{
+		ServerName: "io.test/python-server",
+		Platform:   "cursor",
+	}
+
+	result, _, err := mcpServer.getSetupGuide(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+	guide := textContent.Text
+
+	// Verify Python-specific content
+	assert.Contains(t, guide, "**Runtime**: python")
+	assert.Contains(t, guide, "pip install python-mcp-server")
+	assert.Contains(t, guide, "pipx install python-mcp-server")
+	assert.Contains(t, guide, "python -m python-mcp-server")
+}
+
+func TestGetSetupGuide_DockerPackage(t *testing.T) {
+	t.Parallel()
+
+	server := upstreamv0.ServerJSON{
+		Name:    "io.test/docker-server",
+		Version: "3.0.0",
+		Packages: []model.Package{
+			{
+				RegistryType: "docker",
+				Identifier:   "testorg/mcp-server:latest",
+				Transport: model.Transport{
+					Type: "sse",
+				},
+			},
+		},
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v0/servers/io.test/docker-server/versions/latest" {
+			json.NewEncoder(w).Encode(map[string]any{"server": server})
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &GetSetupGuideParams{
+		ServerName: "io.test/docker-server",
+	}
+
+	result, _, err := mcpServer.getSetupGuide(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+	guide := textContent.Text
+
+	// Verify Docker-specific content
+	assert.Contains(t, guide, "**Runtime**: docker")
+	assert.Contains(t, guide, "docker pull testorg/mcp-server:latest")
+	assert.Contains(t, guide, "docker run")
+}
+
+func TestFindAlternatives_HighSimilarity(t *testing.T) {
+	t.Parallel()
+
+	sourceServer := upstreamv0.ServerJSON{
+		Name:        "io.test/postgres-mcp",
+		Description: "PostgreSQL database connector for MCP",
+		Version:     "1.0.0",
+		Packages: []model.Package{
+			{
+				RegistryType: "npm",
+				Transport: model.Transport{
+					Type: "stdio",
+				},
+			},
+		},
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"database", "sql", "postgres"},
+						"tools": []any{"query", "execute", "transaction"},
+						"metadata": map[string]any{
+							"stars": float64(100),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	similarServer := upstreamv0.ServerJSON{
+		Name:        "io.test/mysql-mcp",
+		Description: "MySQL database connector for MCP",
+		Version:     "2.0.0",
+		Packages: []model.Package{
+			{
+				RegistryType: "npm",
+				Transport: model.Transport{
+					Type: "stdio",
+				},
+			},
+		},
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"database", "sql", "mysql"},
+						"tools": []any{"query", "execute", "transaction"},
+						"metadata": map[string]any{
+							"stars": float64(150),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	dissimilarServer := upstreamv0.ServerJSON{
+		Name:        "io.test/file-server",
+		Description: "File management server",
+		Version:     "1.0.0",
+		Packages: []model.Package{
+			{
+				RegistryType: "pypi",
+				Transport: model.Transport{
+					Type: "http",
+				},
+			},
+		},
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"files", "storage"},
+						"tools": []any{"read", "write"},
+					},
+				},
+			},
+		},
+	}
+
+	// Create test HTTP server
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/v0/servers/io.test/postgres-mcp/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": sourceServer})
+		case testServersPath:
+			// Return list of all servers
+			response := upstreamv0.ServerListResponse{
+				Servers: []upstreamv0.ServerResponse{
+					{Server: sourceServer},
+					{Server: similarServer},
+					{Server: dissimilarServer},
+				},
+				Metadata: upstreamv0.Metadata{
+					Count: 3,
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &FindAlternativesParams{
+		ServerName: "io.test/postgres-mcp",
+		Limit:      5,
+	}
+
+	result, _, err := mcpServer.findAlternatives(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	assert.Len(t, result.Content, 1)
+
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+
+	// Parse JSON response
+	var response struct {
+		Alternatives []struct {
+			Server              upstreamv0.ServerResponse `json:"server"`
+			SimilarityScore     float64                   `json:"similarityScore"`
+			MatchReasons        []string                  `json:"matchReasons"`
+			MigrationComplexity string                    `json:"migrationComplexity"`
+		} `json:"alternatives"`
+		Metadata struct {
+			Count           int    `json:"count"`
+			SourceServer    string `json:"sourceServer"`
+			ScoringCriteria string `json:"scoringCriteria"`
+		} `json:"metadata"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should find MySQL as most similar, file server may or may not be included
+	assert.Greater(t, len(response.Alternatives), 0, "Should find at least one alternative")
+	assert.Equal(t, "io.test/mysql-mcp", response.Alternatives[0].Server.Server.Name)
+	assert.Greater(t, response.Alternatives[0].SimilarityScore, 0.5, "MySQL should be highly similar")
+	assert.Contains(t, response.Alternatives[0].MatchReasons[0], "shared tags")
+	assert.Equal(t, "Low", response.Alternatives[0].MigrationComplexity, "Same tools = low complexity")
+
+	// Verify metadata
+	assert.Equal(t, "io.test/postgres-mcp", response.Metadata.SourceServer)
+	assert.Contains(t, response.Metadata.ScoringCriteria, "tags(40%)")
+}
+
+func TestFindAlternatives_NoSimilarServers(t *testing.T) {
+	t.Parallel()
+
+	uniqueServer := upstreamv0.ServerJSON{
+		Name:        "io.test/unique-server",
+		Description: "Completely unique server",
+		Version:     "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"unique", "special"},
+						"tools": []any{"unique_tool"},
+					},
+				},
+			},
+		},
+	}
+
+	differentServer := upstreamv0.ServerJSON{
+		Name:        "io.test/different-server",
+		Description: "Totally different server",
+		Version:     "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags":  []any{"different", "other"},
+						"tools": []any{"different_tool"},
+					},
+				},
+			},
+		},
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/v0/servers/io.test/unique-server/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": uniqueServer})
+		case testServersPath:
+			response := upstreamv0.ServerListResponse{
+				Servers: []upstreamv0.ServerResponse{
+					{Server: uniqueServer},
+					{Server: differentServer},
+				},
+				Metadata: upstreamv0.Metadata{
+					Count: 2,
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	params := &FindAlternativesParams{
+		ServerName: "io.test/unique-server",
+		Limit:      5,
+	}
+
+	result, _, err := mcpServer.findAlternatives(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+	var response struct {
+		Alternatives []any `json:"alternatives"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	// Should find no or very few alternatives (similarity threshold > 0.1)
+	assert.LessOrEqual(t, len(response.Alternatives), 1, "Should find very few alternatives")
+}
+
+func TestFindAlternatives_LimitParameter(t *testing.T) {
+	t.Parallel()
+
+	// Create source and 10 similar servers
+	servers := make([]upstreamv0.ServerJSON, 11)
+	servers[0] = upstreamv0.ServerJSON{
+		Name:    "io.test/source",
+		Version: "1.0.0",
+		Meta: &upstreamv0.ServerMeta{
+			PublisherProvided: map[string]any{
+				"provider": map[string]any{
+					"package": map[string]any{
+						"tags": []any{"database", "sql"},
+					},
+				},
+			},
+		},
+	}
+
+	for i := 1; i < 11; i++ {
+		servers[i] = upstreamv0.ServerJSON{
+			Name:    fmt.Sprintf("io.test/similar%d", i),
+			Version: "1.0.0",
+			Meta: &upstreamv0.ServerMeta{
+				PublisherProvided: map[string]any{
+					"provider": map[string]any{
+						"package": map[string]any{
+							"tags": []any{"database", "sql"},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/v0/servers/io.test/source/versions/latest":
+			json.NewEncoder(w).Encode(map[string]any{"server": servers[0]})
+		case testServersPath:
+			serverResponses := make([]upstreamv0.ServerResponse, len(servers))
+			for i, srv := range servers {
+				serverResponses[i] = upstreamv0.ServerResponse{Server: srv}
+			}
+			response := upstreamv0.ServerListResponse{
+				Servers:  serverResponses,
+				Metadata: upstreamv0.Metadata{Count: len(servers)},
+			}
+			json.NewEncoder(w).Encode(response)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	mcpServer := NewServer(testServer.URL)
+
+	// Test with limit of 3
+	params := &FindAlternativesParams{
+		ServerName: "io.test/source",
+		Limit:      3,
+	}
+
+	result, _, err := mcpServer.findAlternatives(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+	var response struct {
+		Alternatives []any `json:"alternatives"`
+		Metadata     struct {
+			Count int `json:"count"`
+		} `json:"metadata"`
+	}
+
+	err = json.Unmarshal([]byte(textContent.Text), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3, len(response.Alternatives), "Should respect limit parameter")
+	assert.Equal(t, 3, response.Metadata.Count)
+}

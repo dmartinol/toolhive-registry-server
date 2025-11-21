@@ -20,6 +20,12 @@ import (
 const (
 	// notAvailable is used when a field value is not present
 	notAvailable = "N/A"
+
+	// Registry types
+	registryTypeNPM     = "npm"
+	registryTypePyPI    = "pypi"
+	registryTypeDocker  = "docker"
+	registryTypeUnknown = "unknown"
 )
 
 // Parameter structs for SDK tools with jsonschema tags for automatic schema generation
@@ -56,6 +62,29 @@ type GetServerDetailsParams struct {
 // CompareServersParams defines parameters for the compare_servers tool
 type CompareServersParams struct {
 	ServerNames []string `json:"server_names" jsonschema:"List of server names to compare (2-5 servers)"`
+}
+
+// GetSetupGuideParams defines parameters for the get_setup_guide tool
+type GetSetupGuideParams struct {
+	ServerName string `json:"server_name" jsonschema:"required,Server to get setup guide for"`
+	Platform   string `json:"platform,omitempty" jsonschema:"Platform: claude-desktop, cursor, custom (default: claude-desktop)"`
+	Runtime    string `json:"runtime,omitempty" jsonschema:"Runtime: node, python, docker (auto-detected if not specified)"`
+}
+
+// FindAlternativesParams defines parameters for the find_alternatives tool
+type FindAlternativesParams struct {
+	ServerName string `json:"server_name" jsonschema:"required,Find alternatives to this server"`
+	Reason     string `json:"reason,omitempty" jsonschema:"Why looking for alternative: deprecated, license, features, performance"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"Max alternatives (default: 5, max: 20)"`
+}
+
+// EnvVar represents an environment variable requirement
+type EnvVar struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+	Example     string `json:"example"`
+	Source      string `json:"source"` // "metadata", "derived", "convention"
 }
 
 // ToolHive metadata extraction helpers
@@ -171,6 +200,9 @@ func (s *Server) searchServers(
 		}
 		if params.VersionFilter != "" {
 			queryParams.Set("version", params.VersionFilter)
+		}
+		if params.Name != "" {
+			queryParams.Set("search", params.Name)
 		}
 
 		// Fetch page from Registry API
@@ -453,6 +485,581 @@ func extractTags(server upstreamv0.ServerJSON) []string {
 	return []string{}
 }
 
+// Setup guide helper functions
+
+// detectRuntime detects the runtime from server packages
+func detectRuntime(server upstreamv0.ServerJSON) string {
+	if len(server.Packages) == 0 {
+		return registryTypeUnknown
+	}
+
+	pkg := server.Packages[0]
+	switch pkg.RegistryType {
+	case registryTypeNPM:
+		return "node"
+	case registryTypePyPI:
+		return "python"
+	case registryTypeDocker:
+		return registryTypeDocker
+	default:
+		if pkg.RunTimeHint != "" {
+			return pkg.RunTimeHint
+		}
+		return registryTypeUnknown
+	}
+}
+
+// extractEnvironmentVariables extracts environment variables from server metadata
+func extractEnvironmentVariables(server upstreamv0.ServerJSON) []EnvVar {
+	seen := make(map[string]bool)
+
+	// Extract from ToolHive metadata if available
+	envVars := extractEnvVarsFromMetadata(server, seen)
+
+	// Add conventional env vars based on tags
+	envVars = appendConventionalEnvVars(server, envVars, seen)
+
+	return envVars
+}
+
+// extractEnvVarsFromMetadata extracts environment variables from ToolHive metadata
+func extractEnvVarsFromMetadata(server upstreamv0.ServerJSON, seen map[string]bool) []EnvVar {
+	envVars := []EnvVar{}
+
+	thMeta := extractToolHiveMetadata(server)
+	envConfig, ok := thMeta["env"].(map[string]any)
+	if !ok {
+		return envVars
+	}
+
+	for name, config := range envConfig {
+		if seen[name] {
+			continue
+		}
+		envVar := parseEnvVarConfig(name, config)
+		envVars = append(envVars, envVar)
+		seen[name] = true
+	}
+
+	return envVars
+}
+
+// parseEnvVarConfig parses env var configuration from metadata
+func parseEnvVarConfig(name string, config any) EnvVar {
+	envVar := EnvVar{
+		Name:   name,
+		Source: "metadata",
+	}
+
+	cfgMap, ok := config.(map[string]any)
+	if !ok {
+		return envVar
+	}
+
+	if desc, ok := cfgMap["description"].(string); ok {
+		envVar.Description = desc
+	}
+	if req, ok := cfgMap["required"].(bool); ok {
+		envVar.Required = req
+	}
+	if ex, ok := cfgMap["example"].(string); ok {
+		envVar.Example = ex
+	}
+
+	return envVar
+}
+
+// appendConventionalEnvVars adds conventional environment variables based on tags
+func appendConventionalEnvVars(server upstreamv0.ServerJSON, envVars []EnvVar, seen map[string]bool) []EnvVar {
+	tags := extractTags(server)
+	hasDatabase, hasAPI, hasFiles := categorizeTags(tags)
+
+	if hasDatabase && !seen["DATABASE_URL"] {
+		envVars = append(envVars, EnvVar{
+			Name:        "DATABASE_URL",
+			Description: "Database connection string",
+			Required:    true,
+			Example:     "postgresql://user:password@localhost:5432/dbname",
+			Source:      "convention",
+		})
+	}
+
+	if hasAPI && !seen["API_KEY"] {
+		envVars = append(envVars, EnvVar{
+			Name:        "API_KEY",
+			Description: "API authentication key",
+			Required:    true,
+			Example:     "your-api-key-here",
+			Source:      "convention",
+		})
+	}
+
+	if hasFiles && !seen["ROOT_PATH"] {
+		envVars = append(envVars, EnvVar{
+			Name:        "ROOT_PATH",
+			Description: "Root directory path for file operations",
+			Required:    false,
+			Example:     "/path/to/files",
+			Source:      "convention",
+		})
+	}
+
+	return envVars
+}
+
+// categorizeTags determines which conventional env vars are needed based on tags
+func categorizeTags(tags []string) (hasDatabase, hasAPI, hasFiles bool) {
+	for _, tag := range tags {
+		switch strings.ToLower(tag) {
+		case "database", "sql", "postgres", "mysql":
+			hasDatabase = true
+		case "api":
+			hasAPI = true
+		case "files", "filesystem":
+			hasFiles = true
+		}
+	}
+	return
+}
+
+// generateEnvFileExample generates an example .env file content
+func generateEnvFileExample(envVars []EnvVar) string {
+	if len(envVars) == 0 {
+		return "# No environment variables required\n"
+	}
+
+	var result strings.Builder
+	result.WriteString("# Environment Variables Configuration\n")
+	result.WriteString("# Copy this to .env and fill in your values\n\n")
+
+	for _, env := range envVars {
+		if env.Description != "" {
+			result.WriteString(fmt.Sprintf("# %s\n", env.Description))
+		}
+		if env.Required {
+			result.WriteString("# Required: yes\n")
+		}
+		result.WriteString(fmt.Sprintf("%s=%s\n\n", env.Name, env.Example))
+	}
+
+	return result.String()
+}
+
+// generateInstallationSteps generates installation steps based on package info
+func generateInstallationSteps(server upstreamv0.ServerJSON, _ string) string {
+	var steps strings.Builder
+
+	if len(server.Packages) == 0 {
+		steps.WriteString("1. Clone the repository\n")
+		if server.Repository != nil && server.Repository.URL != "" {
+			steps.WriteString(fmt.Sprintf("   ```bash\n   git clone %s\n   ```\n\n", server.Repository.URL))
+		}
+		steps.WriteString("2. Follow the setup instructions in the repository README\n\n")
+		return steps.String()
+	}
+
+	pkg := server.Packages[0]
+
+	switch pkg.RegistryType {
+	case registryTypeNPM:
+		steps.WriteString("1. Install the package using npm:\n")
+		steps.WriteString(fmt.Sprintf("   ```bash\n   npm install -g %s\n   ```\n\n", pkg.Identifier))
+		steps.WriteString("2. Or use npx to run without installing:\n")
+		steps.WriteString(fmt.Sprintf("   ```bash\n   npx %s\n   ```\n\n", pkg.Identifier))
+
+	case registryTypePyPI:
+		steps.WriteString("1. Install the package using pip:\n")
+		steps.WriteString(fmt.Sprintf("   ```bash\n   pip install %s\n   ```\n\n", pkg.Identifier))
+		steps.WriteString("2. Or use pipx for isolated installation:\n")
+		steps.WriteString(fmt.Sprintf("   ```bash\n   pipx install %s\n   ```\n\n", pkg.Identifier))
+
+	case registryTypeDocker:
+		steps.WriteString("1. Pull the Docker image:\n")
+		steps.WriteString(fmt.Sprintf("   ```bash\n   docker pull %s\n   ```\n\n", pkg.Identifier))
+		steps.WriteString("2. Run the container:\n")
+		steps.WriteString(fmt.Sprintf("   ```bash\n   docker run -it %s\n   ```\n\n", pkg.Identifier))
+
+	default:
+		steps.WriteString("1. Install the package:\n")
+		steps.WriteString("   ```bash\n")
+		steps.WriteString(fmt.Sprintf("   # Install %s\n", pkg.Identifier))
+		steps.WriteString("   # See repository for installation instructions\n")
+		steps.WriteString("   ```\n\n")
+	}
+
+	return steps.String()
+}
+
+// generatePlatformConfig generates platform-specific configuration
+func generatePlatformConfig(server upstreamv0.ServerJSON, platform string) string {
+	if len(server.Packages) == 0 {
+		return "# Configuration not available - no package information\n"
+	}
+
+	pkg := server.Packages[0]
+	var config strings.Builder
+
+	switch platform {
+	case "claude-desktop":
+		config.WriteString("### Claude Desktop Configuration\n\n")
+		config.WriteString("Add to `~/.config/claude/config.json` (macOS/Linux) ")
+		config.WriteString("or `%APPDATA%\\Claude\\config.json` (Windows):\n\n")
+		config.WriteString("```json\n{\n  \"mcpServers\": {\n")
+		config.WriteString(fmt.Sprintf("    \"%s\": {\n", server.Name))
+
+		switch pkg.RegistryType {
+		case registryTypeNPM:
+			config.WriteString("      \"command\": \"npx\",\n")
+			config.WriteString(fmt.Sprintf("      \"args\": [\"%s\"]\n", pkg.Identifier))
+		case registryTypePyPI:
+			config.WriteString("      \"command\": \"python\",\n")
+			config.WriteString(fmt.Sprintf("      \"args\": [\"-m\", \"%s\"]\n", pkg.Identifier))
+		default:
+			config.WriteString(fmt.Sprintf("      \"command\": \"%s\"\n", pkg.Identifier))
+		}
+
+		config.WriteString("    }\n  }\n}\n```\n\n")
+
+	case "cursor":
+		config.WriteString("### Cursor Configuration\n\n")
+		config.WriteString("Add to `~/.cursor/mcp.json`:\n\n")
+		config.WriteString("```json\n{\n  \"mcpServers\": {\n")
+		config.WriteString(fmt.Sprintf("    \"%s\": {\n", server.Name))
+
+		switch pkg.RegistryType {
+		case registryTypeNPM:
+			config.WriteString("      \"command\": \"npx\",\n")
+			config.WriteString(fmt.Sprintf("      \"args\": [\"%s\"]\n", pkg.Identifier))
+		case registryTypePyPI:
+			config.WriteString("      \"command\": \"python\",\n")
+			config.WriteString(fmt.Sprintf("      \"args\": [\"-m\", \"%s\"]\n", pkg.Identifier))
+		default:
+			config.WriteString(fmt.Sprintf("      \"command\": \"%s\"\n", pkg.Identifier))
+		}
+
+		config.WriteString("    }\n  }\n}\n```\n\n")
+
+	case "custom":
+		config.WriteString("### Custom MCP Client Configuration\n\n")
+		config.WriteString("Connect using stdio transport:\n\n")
+		config.WriteString("```bash\n")
+		switch pkg.RegistryType {
+		case "npm":
+			config.WriteString(fmt.Sprintf("npx %s\n", pkg.Identifier))
+		case "pypi":
+			config.WriteString(fmt.Sprintf("python -m %s\n", pkg.Identifier))
+		default:
+			config.WriteString(fmt.Sprintf("%s\n", pkg.Identifier))
+		}
+		config.WriteString("```\n\n")
+
+	default:
+		config.WriteString("### Configuration\n\n")
+		config.WriteString("See your MCP client documentation for configuration instructions.\n\n")
+	}
+
+	return config.String()
+}
+
+// generateTroubleshootingTips generates troubleshooting tips based on transport and runtime
+func generateTroubleshootingTips(server upstreamv0.ServerJSON) string {
+	var tips strings.Builder
+	tips.WriteString("## Troubleshooting\n\n")
+
+	if len(server.Packages) == 0 {
+		tips.WriteString("- Check the repository README for setup instructions\n")
+		tips.WriteString("- Verify all dependencies are installed\n\n")
+		return tips.String()
+	}
+
+	pkg := server.Packages[0]
+
+	// Runtime-specific tips
+	switch pkg.RegistryType {
+	case registryTypeNPM:
+		tips.WriteString("**Common Issues:**\n\n")
+		tips.WriteString("- **\"command not found\"**: Ensure Node.js is installed: `node --version`\n")
+		tips.WriteString("- **Permission errors**: Use `npx` instead of global install, or fix npm permissions\n")
+		tips.WriteString("- **Version conflicts**: Try `npm install -g " + pkg.Identifier + "@latest`\n\n")
+
+	case registryTypePyPI:
+		tips.WriteString("**Common Issues:**\n\n")
+		tips.WriteString("- **\"module not found\"**: Ensure Python is installed: `python --version`\n")
+		tips.WriteString("- **Permission errors**: Use `pipx` for isolated installation\n")
+		tips.WriteString("- **Version conflicts**: Try using a virtual environment: `python -m venv .venv`\n\n")
+
+	case registryTypeDocker:
+		tips.WriteString("**Common Issues:**\n\n")
+		tips.WriteString("- **\"docker: command not found\"**: Install Docker Desktop\n")
+		tips.WriteString("- **Permission errors**: Ensure Docker daemon is running\n")
+		tips.WriteString("- **Image pull errors**: Check internet connection and Docker Hub access\n\n")
+	}
+
+	// Transport-specific tips
+	if pkg.Transport.Type == "stdio" {
+		tips.WriteString("**stdio Transport:**\n\n")
+		tips.WriteString("- Ensure the server binary is executable and in your PATH\n")
+		tips.WriteString("- Check that the command doesn't require interactive input\n\n")
+	}
+
+	tips.WriteString("**Still having issues?**\n\n")
+	if server.Repository != nil && server.Repository.URL != "" {
+		tips.WriteString(fmt.Sprintf("- Check the [GitHub Issues](%s/issues) for known problems\n", server.Repository.URL))
+		tips.WriteString(fmt.Sprintf("- Read the [documentation](%s#readme)\n", server.Repository.URL))
+	}
+	tips.WriteString("- Verify your MCP client is up to date\n\n")
+
+	return tips.String()
+}
+
+// Similarity scoring helper functions for find_alternatives
+
+// scoreTagOverlap calculates tag overlap score (0.0 to 1.0) using Jaccard similarity.
+// Jaccard similarity = |A ∩ B| / |A ∪ B| (intersection over union)
+// See: https://en.wikipedia.org/wiki/Jaccard_index
+func scoreTagOverlap(tagsA, tagsB []string) float64 {
+	if len(tagsA) == 0 || len(tagsB) == 0 {
+		return 0.0
+	}
+
+	// Convert to lowercase for case-insensitive comparison
+	setA := make(map[string]bool)
+	for _, tag := range tagsA {
+		setA[strings.ToLower(tag)] = true
+	}
+
+	matches := 0
+	for _, tag := range tagsB {
+		if setA[strings.ToLower(tag)] {
+			matches++
+		}
+	}
+
+	// Return Jaccard similarity: intersection / union
+	union := len(tagsA) + len(tagsB) - matches
+	if union == 0 {
+		return 0.0
+	}
+	return float64(matches) / float64(union)
+}
+
+// scoreToolOverlap calculates tool overlap score (0.0 to 1.0) using Jaccard similarity.
+// Jaccard similarity = |A ∩ B| / |A ∪ B| (intersection over union)
+// See: https://en.wikipedia.org/wiki/Jaccard_index
+func scoreToolOverlap(toolsA, toolsB []string) float64 {
+	if len(toolsA) == 0 || len(toolsB) == 0 {
+		return 0.0
+	}
+
+	// Convert to lowercase for case-insensitive comparison
+	setA := make(map[string]bool)
+	for _, tool := range toolsA {
+		setA[strings.ToLower(tool)] = true
+	}
+
+	matches := 0
+	for _, tool := range toolsB {
+		if setA[strings.ToLower(tool)] {
+			matches++
+		}
+	}
+
+	// Return Jaccard similarity
+	union := len(toolsA) + len(toolsB) - matches
+	if union == 0 {
+		return 0.0
+	}
+	return float64(matches) / float64(union)
+}
+
+// scoreDescriptionSimilarity calculates description keyword similarity (0.0 to 1.0) using overlap coefficient.
+// Overlap coefficient = |A ∩ B| / min(|A|, |B|)
+// See: https://en.wikipedia.org/wiki/Overlap_coefficient
+func scoreDescriptionSimilarity(descA, descB string) float64 {
+	// Simple keyword-based similarity
+	wordsA := strings.Fields(strings.ToLower(descA))
+	wordsB := strings.Fields(strings.ToLower(descB))
+
+	if len(wordsA) == 0 || len(wordsB) == 0 {
+		return 0.0
+	}
+
+	// Create word frequency maps
+	freqA := make(map[string]int)
+	for _, word := range wordsA {
+		// Filter out common stop words
+		if len(word) > 3 {
+			freqA[word]++
+		}
+	}
+
+	matches := 0
+	for _, word := range wordsB {
+		if len(word) > 3 && freqA[word] > 0 {
+			matches++
+			freqA[word]-- // Count each match only once
+		}
+	}
+
+	// Return overlap coefficient
+	minLen := len(wordsA)
+	if len(wordsB) < minLen {
+		minLen = len(wordsB)
+	}
+	if minLen == 0 {
+		return 0.0
+	}
+	return float64(matches) / float64(minLen)
+}
+
+// scoreTransportCompatibility checks if transport types are compatible (0.0 or 1.0)
+func scoreTransportCompatibility(serverA, serverB upstreamv0.ServerJSON) float64 {
+	if len(serverA.Packages) == 0 || len(serverB.Packages) == 0 {
+		return 0.5 // Unknown transport, neutral score
+	}
+
+	transportA := strings.ToLower(serverA.Packages[0].Transport.Type)
+	transportB := strings.ToLower(serverB.Packages[0].Transport.Type)
+
+	if transportA == transportB {
+		return 1.0
+	}
+	return 0.0
+}
+
+// calculateSimilarityScore calculates overall similarity score (0.0 to 1.0)
+func calculateSimilarityScore(sourceServer, targetServer upstreamv0.ServerJSON) float64 {
+	// Don't compare a server to itself
+	if sourceServer.Name == targetServer.Name {
+		return 0.0
+	}
+
+	// Extract metadata
+	sourceTags := extractTags(sourceServer)
+	targetTags := extractTags(targetServer)
+	sourceTools := extractTools(sourceServer)
+	targetTools := extractTools(targetServer)
+
+	// Calculate component scores
+	tagScore := scoreTagOverlap(sourceTags, targetTags)
+	toolScore := scoreToolOverlap(sourceTools, targetTools)
+	descScore := scoreDescriptionSimilarity(sourceServer.Description, targetServer.Description)
+	transportScore := scoreTransportCompatibility(sourceServer, targetServer)
+
+	// Weighted combination (as per plan: tags 40%, tools 40%, transport 10%, description 10%)
+	similarityScore := (tagScore * 0.4) + (toolScore * 0.4) + (transportScore * 0.1) + (descScore * 0.1)
+
+	return similarityScore
+}
+
+// estimateMigrationComplexity estimates migration difficulty based on tool overlap
+func estimateMigrationComplexity(sourceServer, targetServer upstreamv0.ServerJSON) string {
+	sourceTools := extractTools(sourceServer)
+	targetTools := extractTools(targetServer)
+
+	if len(sourceTools) == 0 && len(targetTools) == 0 {
+		return "Low"
+	}
+
+	toolScore := scoreToolOverlap(sourceTools, targetTools)
+
+	if toolScore >= 0.8 {
+		return "Low" // High tool overlap = easy migration
+	} else if toolScore >= 0.5 {
+		return "Medium"
+	}
+	return "High" // Low tool overlap = difficult migration
+}
+
+// generateMatchReasons creates human-readable similarity reasons
+func generateMatchReasons(sourceServer, targetServer upstreamv0.ServerJSON) []string {
+	reasons := []string{}
+
+	// Tag overlap
+	sourceTags := extractTags(sourceServer)
+	targetTags := extractTags(targetServer)
+	commonTags := []string{}
+	tagMap := make(map[string]bool)
+	for _, tag := range sourceTags {
+		tagMap[strings.ToLower(tag)] = true
+	}
+	for _, tag := range targetTags {
+		if tagMap[strings.ToLower(tag)] {
+			commonTags = append(commonTags, tag)
+		}
+	}
+	if len(commonTags) > 0 {
+		reasons = append(reasons, fmt.Sprintf("shared tags: %s", strings.Join(commonTags, ", ")))
+	}
+
+	// Tool overlap
+	sourceTools := extractTools(sourceServer)
+	targetTools := extractTools(targetServer)
+	commonTools := 0
+	toolMap := make(map[string]bool)
+	for _, tool := range sourceTools {
+		toolMap[strings.ToLower(tool)] = true
+	}
+	for _, tool := range targetTools {
+		if toolMap[strings.ToLower(tool)] {
+			commonTools++
+		}
+	}
+	if commonTools > 0 {
+		reasons = append(reasons, fmt.Sprintf("similar tools: %d/%d", commonTools, len(sourceTools)))
+	}
+
+	// Transport match
+	if len(sourceServer.Packages) > 0 && len(targetServer.Packages) > 0 {
+		sourceTransport := sourceServer.Packages[0].Transport.Type
+		targetTransport := targetServer.Packages[0].Transport.Type
+		if strings.EqualFold(sourceTransport, targetTransport) {
+			reasons = append(reasons, fmt.Sprintf("same transport: %s", sourceTransport))
+		}
+	}
+
+	// Stars comparison
+	sourceStars := extractStars(sourceServer)
+	targetStars := extractStars(targetServer)
+	if targetStars > sourceStars {
+		reasons = append(reasons, fmt.Sprintf("more popular: %d vs %d stars", targetStars, sourceStars))
+	}
+
+	return reasons
+}
+
+// generateDifferences highlights key differences between servers
+func generateDifferences(sourceServer, targetServer upstreamv0.ServerJSON) []string {
+	diffs := []string{}
+
+	// Transport difference
+	if len(sourceServer.Packages) > 0 && len(targetServer.Packages) > 0 {
+		sourceTransport := sourceServer.Packages[0].Transport.Type
+		targetTransport := targetServer.Packages[0].Transport.Type
+		if !strings.EqualFold(sourceTransport, targetTransport) {
+			diffs = append(diffs, fmt.Sprintf("transport: %s vs %s", sourceTransport, targetTransport))
+		}
+	}
+
+	// Runtime difference
+	sourceRuntime := detectRuntime(sourceServer)
+	targetRuntime := detectRuntime(targetServer)
+	if sourceRuntime != targetRuntime && sourceRuntime != registryTypeUnknown && targetRuntime != registryTypeUnknown {
+		diffs = append(diffs, fmt.Sprintf("runtime: %s vs %s", sourceRuntime, targetRuntime))
+	}
+
+	// Tier difference
+	sourceThMeta := extractToolHiveMetadata(sourceServer)
+	targetThMeta := extractToolHiveMetadata(targetServer)
+	sourceTier, _ := sourceThMeta["tier"].(string)
+	targetTier, _ := targetThMeta["tier"].(string)
+	if sourceTier != "" && targetTier != "" && sourceTier != targetTier {
+		diffs = append(diffs, fmt.Sprintf("tier: %s vs %s", sourceTier, targetTier))
+	}
+
+	return diffs
+}
+
 // applySorting sorts servers based on the sort parameter
 func (*Server) applySorting(servers []upstreamv0.ServerResponse, sortBy string) []upstreamv0.ServerResponse {
 	if sortBy == "" {
@@ -510,6 +1117,228 @@ func (s *Server) getServerDetails(
 
 	// Return the official ServerResponse format as JSON
 	jsonBytes, err := json.MarshalIndent(serverResp, "", "  ")
+	if err != nil {
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to serialize response: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: string(jsonBytes)}},
+	}, nil, nil
+}
+
+// getSetupGuide implements the get_setup_guide tool
+func (s *Server) getSetupGuide(
+	ctx context.Context, _ *sdkmcp.CallToolRequest, params *GetSetupGuideParams,
+) (*sdkmcp.CallToolResult, any, error) {
+	// SDK validates required fields
+	serverName := params.ServerName
+	platform := params.Platform
+	if platform == "" {
+		platform = "claude-desktop"
+	}
+	runtime := params.Runtime
+
+	// Get server from Registry API
+	server, err := s.getServerFromAPI(ctx, serverName)
+	if err != nil {
+		logger.Errorf("Failed to get server %s from API: %v", serverName, err)
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", serverName)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	// Auto-detect runtime if not specified
+	if runtime == "" {
+		runtime = detectRuntime(server)
+	}
+
+	// Build setup guide markdown
+	var guide strings.Builder
+
+	// Header
+	guide.WriteString(fmt.Sprintf("# Setup Guide: %s\n\n", server.Name))
+	if server.Description != "" {
+		guide.WriteString(fmt.Sprintf("%s\n\n", server.Description))
+	}
+
+	// Prerequisites
+	guide.WriteString("## Prerequisites\n\n")
+	guide.WriteString(fmt.Sprintf("- **Runtime**: %s\n", runtime))
+	if len(server.Packages) > 0 {
+		guide.WriteString(fmt.Sprintf("- **Transport**: %s\n", server.Packages[0].Transport.Type))
+	}
+	guide.WriteString("\n")
+
+	// Installation steps
+	guide.WriteString("## Installation\n\n")
+	guide.WriteString(generateInstallationSteps(server, runtime))
+
+	// Environment variables
+	envVars := extractEnvironmentVariables(server)
+	if len(envVars) > 0 {
+		guide.WriteString("## Environment Variables\n\n")
+		guide.WriteString(generateEnvFileExample(envVars))
+	}
+
+	// Configuration examples
+	guide.WriteString("## Configuration\n\n")
+	guide.WriteString(generatePlatformConfig(server, platform))
+
+	// Add other platform examples
+	if platform != "cursor" {
+		guide.WriteString(generatePlatformConfig(server, "cursor"))
+	}
+	if platform != "custom" {
+		guide.WriteString(generatePlatformConfig(server, "custom"))
+	}
+
+	// Troubleshooting
+	guide.WriteString(generateTroubleshootingTips(server))
+
+	// Next steps
+	guide.WriteString("## Next Steps\n\n")
+	if server.Repository != nil && server.Repository.URL != "" {
+		guide.WriteString(fmt.Sprintf("- 📚 [Read the documentation](%s#readme)\n", server.Repository.URL))
+		guide.WriteString(fmt.Sprintf("- 🐛 [Report issues](%s/issues)\n", server.Repository.URL))
+		guide.WriteString(fmt.Sprintf("- ⭐ [Star the project](%s)\n", server.Repository.URL))
+	}
+
+	tools := extractTools(server)
+	if len(tools) > 0 {
+		guide.WriteString(fmt.Sprintf("\n**Available Tools**: %s\n", strings.Join(tools, ", ")))
+	}
+
+	// TODO: Add real-time download stats for popularity
+	// TODO: Include known issues from GitHub
+	// TODO: Add user reviews/ratings when available
+
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: guide.String()}},
+	}, nil, nil
+}
+
+// findAlternatives implements the find_alternatives tool
+func (s *Server) findAlternatives(
+	ctx context.Context, _ *sdkmcp.CallToolRequest, params *FindAlternativesParams,
+) (*sdkmcp.CallToolResult, any, error) {
+	// SDK validates required fields
+	serverName := params.ServerName
+	limit := params.Limit
+	if limit == 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+
+	// Get the source server
+	sourceServer, err := s.getServerFromAPI(ctx, serverName)
+	if err != nil {
+		logger.Errorf("Failed to get server %s from API: %v", serverName, err)
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", serverName)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	// Fetch all servers to compare against
+	allServers, err := s.listServersFromAPI(ctx, url.Values{})
+	if err != nil {
+		logger.Errorf("Failed to fetch servers from API: %v", err)
+		return &sdkmcp.CallToolResult{
+			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to fetch servers: %v", err)}},
+			IsError: true,
+		}, nil, nil
+	}
+
+	// Calculate similarity scores for all servers
+	type ScoredAlternative struct {
+		Server              upstreamv0.ServerResponse
+		SimilarityScore     float64
+		MatchReasons        []string
+		MigrationComplexity string
+		Differences         []string
+	}
+
+	alternatives := []ScoredAlternative{}
+
+	for _, serverResp := range allServers.Servers {
+		// Skip the source server itself
+		if serverResp.Server.Name == sourceServer.Name {
+			continue
+		}
+
+		score := calculateSimilarityScore(sourceServer, serverResp.Server)
+
+		// Only include servers with meaningful similarity (> 0.1)
+		if score > 0.1 {
+			alt := ScoredAlternative{
+				Server:              serverResp,
+				SimilarityScore:     score,
+				MatchReasons:        generateMatchReasons(sourceServer, serverResp.Server),
+				MigrationComplexity: estimateMigrationComplexity(sourceServer, serverResp.Server),
+				Differences:         generateDifferences(sourceServer, serverResp.Server),
+			}
+			alternatives = append(alternatives, alt)
+		}
+	}
+
+	// Sort by similarity score descending
+	sort.Slice(alternatives, func(i, j int) bool {
+		return alternatives[i].SimilarityScore > alternatives[j].SimilarityScore
+	})
+
+	// Limit results
+	if len(alternatives) > limit {
+		alternatives = alternatives[:limit]
+	}
+
+	// Build response
+	type AlternativeResponse struct {
+		Server              upstreamv0.ServerResponse `json:"server"`
+		SimilarityScore     float64                   `json:"similarityScore"`
+		MatchReasons        []string                  `json:"matchReasons"`
+		MigrationComplexity string                    `json:"migrationComplexity"`
+		Differences         []string                  `json:"differences,omitempty"`
+	}
+
+	response := struct {
+		Alternatives []AlternativeResponse `json:"alternatives"`
+		Metadata     struct {
+			Count           int    `json:"count"`
+			SourceServer    string `json:"sourceServer"`
+			Reason          string `json:"reason,omitempty"`
+			ScoringCriteria string `json:"scoringCriteria"`
+		} `json:"metadata"`
+	}{
+		Alternatives: make([]AlternativeResponse, len(alternatives)),
+		Metadata: struct {
+			Count           int    `json:"count"`
+			SourceServer    string `json:"sourceServer"`
+			Reason          string `json:"reason,omitempty"`
+			ScoringCriteria string `json:"scoringCriteria"`
+		}{
+			Count:           len(alternatives),
+			SourceServer:    sourceServer.Name,
+			Reason:          params.Reason,
+			ScoringCriteria: "tags(40%), tools(40%), transport(10%), description(10%)",
+		},
+	}
+
+	for i, alt := range alternatives {
+		response.Alternatives[i] = AlternativeResponse(alt)
+	}
+
+	// TODO: Add semantic similarity using embeddings
+	// TODO: Include user reviews/ratings when available
+	// TODO: Fetch real-time download stats for popularity
+
+	// Return as JSON
+	jsonBytes, err := json.MarshalIndent(response, "", "  ")
 	if err != nil {
 		return &sdkmcp.CallToolResult{
 			Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: failed to serialize response: %v", err)}},
