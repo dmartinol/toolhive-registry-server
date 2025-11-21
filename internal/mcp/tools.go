@@ -27,11 +27,12 @@ const (
 // SearchServersParams defines parameters for the search_servers tool with comprehensive filtering
 type SearchServersParams struct {
 	// Search & Filter
-	Query     string   `json:"query,omitempty" jsonschema:"Natural language query or keywords"`
-	Name      string   `json:"name,omitempty" jsonschema:"Filter by server name (substring match)"`
-	Tags      []string `json:"tags,omitempty" jsonschema:"Filter by tags"`
-	Tools     []string `json:"tools,omitempty" jsonschema:"Filter by tool names"`
-	Transport string   `json:"transport,omitempty" jsonschema:"Filter by transport type (stdio, http, sse)"`
+	Query        string   `json:"query,omitempty" jsonschema:"Natural language query or keywords"`
+	Name         string   `json:"name,omitempty" jsonschema:"Filter by server name (substring match)"`
+	Tags         []string `json:"tags,omitempty" jsonschema:"Filter by tags"`
+	Tools        []string `json:"tools,omitempty" jsonschema:"Filter by tool names"`
+	Transport    string   `json:"transport,omitempty" jsonschema:"Filter by transport type (stdio, http, sse)"`
+	RegistryType string   `json:"registry_type,omitempty" jsonschema:"Filter by registry type (npm, pypi, oci, nuget, mcpb)"`
 
 	// Metadata Filters
 	MinStars int    `json:"min_stars,omitempty" jsonschema:"Minimum star count"`
@@ -40,7 +41,7 @@ type SearchServersParams struct {
 	Status   string `json:"status,omitempty" jsonschema:"Filter by status"`
 
 	// Pagination Control
-	Cursor        string `json:"cursor,omitempty" jsonschema:"Pagination cursor from previous response (for iterating through results)"`
+	Cursor        string `json:"cursor,omitempty" jsonschema:"Pagination cursor from previous response (for iterating)"`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results per call (default: 20, max: 1000)"`
 	VersionFilter string `json:"version_filter,omitempty" jsonschema:"Filter by version"`
 	SortBy        string `json:"sort_by,omitempty" jsonschema:"Sort by: stars, pulls, name, updated_at"`
@@ -263,137 +264,178 @@ func (s *Server) applyFilters(servers []upstreamv0.ServerResponse, params *Searc
 	filtered := []upstreamv0.ServerResponse{}
 
 	for _, serverResp := range servers {
-		server := serverResp.Server
-
-		// Filter by name (substring match)
-		if params.Name != "" {
-			if !strings.Contains(strings.ToLower(server.Name), strings.ToLower(params.Name)) {
-				continue
-			}
+		if s.matchesAllFilters(serverResp.Server, params) {
+			filtered = append(filtered, serverResp)
 		}
-
-		// Filter by query (search in name, description)
-		if params.Query != "" {
-			queryLower := strings.ToLower(params.Query)
-			matchFound := false
-
-			if strings.Contains(strings.ToLower(server.Name), queryLower) {
-				matchFound = true
-			} else if strings.Contains(strings.ToLower(server.Description), queryLower) {
-				matchFound = true
-			} else {
-				// Search in tools
-				tools := extractTools(server)
-				for _, tool := range tools {
-					if strings.Contains(strings.ToLower(tool), queryLower) {
-						matchFound = true
-						break
-					}
-				}
-			}
-
-			if !matchFound {
-				continue
-			}
-		}
-
-		// Filter by tags
-		if len(params.Tags) > 0 {
-			serverTags := extractTags(server)
-			hasAllTags := true
-			for _, requiredTag := range params.Tags {
-				found := false
-				for _, serverTag := range serverTags {
-					if strings.EqualFold(serverTag, requiredTag) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					hasAllTags = false
-					break
-				}
-			}
-			if !hasAllTags {
-				continue
-			}
-		}
-
-		// Filter by tools
-		if len(params.Tools) > 0 {
-			serverTools := extractTools(server)
-			hasAllTools := true
-			for _, requiredTool := range params.Tools {
-				found := false
-				for _, serverTool := range serverTools {
-					if strings.Contains(strings.ToLower(serverTool), strings.ToLower(requiredTool)) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					hasAllTools = false
-					break
-				}
-			}
-			if !hasAllTools {
-				continue
-			}
-		}
-
-		// Filter by transport
-		if params.Transport != "" {
-			hasTransport := false
-			for _, pkg := range server.Packages {
-				if strings.EqualFold(pkg.Transport.Type, params.Transport) {
-					hasTransport = true
-					break
-				}
-			}
-			if !hasTransport {
-				continue
-			}
-		}
-
-		// Filter by stars
-		if params.MinStars > 0 {
-			stars := extractStars(server)
-			if stars < int64(params.MinStars) {
-				continue
-			}
-		}
-
-		// Filter by pulls
-		if params.MinPulls > 0 {
-			pulls := extractPulls(server)
-			if pulls < int64(params.MinPulls) {
-				continue
-			}
-		}
-
-		// Filter by tier
-		if params.Tier != "" {
-			thMeta := extractToolHiveMetadata(server)
-			tier, _ := thMeta["tier"].(string)
-			if !strings.EqualFold(tier, params.Tier) {
-				continue
-			}
-		}
-
-		// Filter by status
-		if params.Status != "" {
-			thMeta := extractToolHiveMetadata(server)
-			status, _ := thMeta["status"].(string)
-			if !strings.EqualFold(status, params.Status) {
-				continue
-			}
-		}
-
-		// Server passed all filters
-		filtered = append(filtered, serverResp)
 	}
 
 	return filtered
+}
+
+// matchesAllFilters checks if a server matches all filter criteria
+func (s *Server) matchesAllFilters(server upstreamv0.ServerJSON, params *SearchServersParams) bool {
+	return s.matchesNameFilter(server, params.Name) &&
+		s.matchesQueryFilter(server, params.Query) &&
+		s.matchesTagsFilter(server, params.Tags) &&
+		s.matchesToolsFilter(server, params.Tools) &&
+		s.matchesTransportFilter(server, params.Transport) &&
+		s.matchesRegistryTypeFilter(server, params.RegistryType) &&
+		s.matchesStarsFilter(server, params.MinStars) &&
+		s.matchesPullsFilter(server, params.MinPulls) &&
+		s.matchesTierFilter(server, params.Tier) &&
+		s.matchesStatusFilter(server, params.Status)
+}
+
+// matchesNameFilter checks if server name contains the filter string
+func (*Server) matchesNameFilter(server upstreamv0.ServerJSON, nameFilter string) bool {
+	if nameFilter == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(server.Name), strings.ToLower(nameFilter))
+}
+
+// matchesQueryFilter checks if query matches name, description, or tools
+func (*Server) matchesQueryFilter(server upstreamv0.ServerJSON, query string) bool {
+	if query == "" {
+		return true
+	}
+
+	queryLower := strings.ToLower(query)
+
+	// Check name
+	if strings.Contains(strings.ToLower(server.Name), queryLower) {
+		return true
+	}
+
+	// Check description
+	if strings.Contains(strings.ToLower(server.Description), queryLower) {
+		return true
+	}
+
+	// Check tools
+	tools := extractTools(server)
+	for _, tool := range tools {
+		if strings.Contains(strings.ToLower(tool), queryLower) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// matchesTagsFilter checks if server has all required tags
+func (s *Server) matchesTagsFilter(server upstreamv0.ServerJSON, requiredTags []string) bool {
+	if len(requiredTags) == 0 {
+		return true
+	}
+
+	serverTags := extractTags(server)
+	for _, requiredTag := range requiredTags {
+		if !s.hasTag(serverTags, requiredTag) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasTag checks if a tag exists in the tags list (case-insensitive)
+func (*Server) hasTag(tags []string, targetTag string) bool {
+	for _, tag := range tags {
+		if strings.EqualFold(tag, targetTag) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesToolsFilter checks if server has all required tools
+func (s *Server) matchesToolsFilter(server upstreamv0.ServerJSON, requiredTools []string) bool {
+	if len(requiredTools) == 0 {
+		return true
+	}
+
+	serverTools := extractTools(server)
+	for _, requiredTool := range requiredTools {
+		if !s.hasTool(serverTools, requiredTool) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasTool checks if a tool exists in the tools list (case-insensitive substring match)
+func (*Server) hasTool(tools []string, targetTool string) bool {
+	targetLower := strings.ToLower(targetTool)
+	for _, tool := range tools {
+		if strings.Contains(strings.ToLower(tool), targetLower) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesTransportFilter checks if server supports the transport type
+func (*Server) matchesTransportFilter(server upstreamv0.ServerJSON, transport string) bool {
+	if transport == "" {
+		return true
+	}
+
+	for _, pkg := range server.Packages {
+		if strings.EqualFold(pkg.Transport.Type, transport) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesRegistryTypeFilter checks if server has packages with the specified registry type
+func (*Server) matchesRegistryTypeFilter(server upstreamv0.ServerJSON, registryType string) bool {
+	if registryType == "" {
+		return true
+	}
+
+	for _, pkg := range server.Packages {
+		if strings.EqualFold(pkg.RegistryType, registryType) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesStarsFilter checks if server meets minimum star count
+func (*Server) matchesStarsFilter(server upstreamv0.ServerJSON, minStars int) bool {
+	if minStars <= 0 {
+		return true
+	}
+	return extractStars(server) >= int64(minStars)
+}
+
+// matchesPullsFilter checks if server meets minimum pull count
+func (*Server) matchesPullsFilter(server upstreamv0.ServerJSON, minPulls int) bool {
+	if minPulls <= 0 {
+		return true
+	}
+	return extractPulls(server) >= int64(minPulls)
+}
+
+// matchesTierFilter checks if server matches the tier
+func (*Server) matchesTierFilter(server upstreamv0.ServerJSON, tier string) bool {
+	if tier == "" {
+		return true
+	}
+	thMeta := extractToolHiveMetadata(server)
+	serverTier, _ := thMeta["tier"].(string)
+	return strings.EqualFold(serverTier, tier)
+}
+
+// matchesStatusFilter checks if server matches the status
+func (*Server) matchesStatusFilter(server upstreamv0.ServerJSON, status string) bool {
+	if status == "" {
+		return true
+	}
+	thMeta := extractToolHiveMetadata(server)
+	serverStatus, _ := thMeta["status"].(string)
+	return strings.EqualFold(serverStatus, status)
 }
 
 // extractTags extracts tags from server metadata
@@ -480,131 +522,161 @@ func (s *Server) getServerDetails(
 	}, nil, nil
 }
 
-// listServers implements the list_servers tool
 // compareServers implements the compare_servers tool
-func (s *Server) compareServers(ctx context.Context, req *sdkmcp.CallToolRequest, params *CompareServersParams) (*sdkmcp.CallToolResult, any, error) {
+func (s *Server) compareServers(
+	ctx context.Context, _ *sdkmcp.CallToolRequest, params *CompareServersParams,
+) (*sdkmcp.CallToolResult, any, error) {
 	// SDK validates array length via jsonschema tags (minItems=2, maxItems=5)
 	serverNames := params.ServerNames
 
 	// Fetch all servers from Registry API
+	servers, err := s.fetchServersForComparison(ctx, serverNames)
+	if err != nil {
+		return err, nil, nil
+	}
+
+	// Build comparison output
+	result := s.buildComparisonOutput(servers)
+
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: result}},
+	}, nil, nil
+}
+
+// fetchServersForComparison retrieves all servers by name for comparison
+func (s *Server) fetchServersForComparison(
+	ctx context.Context, serverNames []string,
+) ([]upstreamv0.ServerJSON, *sdkmcp.CallToolResult) {
 	servers := make([]upstreamv0.ServerJSON, 0, len(serverNames))
 	for _, name := range serverNames {
 		server, err := s.getServerFromAPI(ctx, name)
 		if err != nil {
 			logger.Errorf("Failed to get server %s from API: %v", name, err)
-			return &sdkmcp.CallToolResult{
+			return nil, &sdkmcp.CallToolResult{
 				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("Error: server not found: %s", name)}},
 				IsError: true,
-			}, nil, nil
+			}
 		}
 		servers = append(servers, server)
 	}
+	return servers, nil
+}
 
-	// Format comparison
+// buildComparisonOutput generates the full comparison markdown output
+func (s *Server) buildComparisonOutput(servers []upstreamv0.ServerJSON) string {
 	var result strings.Builder
 	result.WriteString("# Server Comparison\n\n")
 
-	// Create comparison table
+	s.writeComparisonTable(&result, servers)
+	s.writeDescriptions(&result, servers)
+	s.writeToolLists(&result, servers)
+
+	return result.String()
+}
+
+// writeComparisonTable writes the comparison table with all attributes
+func (s *Server) writeComparisonTable(result *strings.Builder, servers []upstreamv0.ServerJSON) {
+	// Table header
+	s.writeTableHeader(result, servers)
+
+	// Define attribute rows
+	attributes := []struct {
+		label     string
+		extractor func(upstreamv0.ServerJSON) string
+	}{
+		{"**Version**", func(srv upstreamv0.ServerJSON) string { return srv.Version }},
+		{"**⭐ Stars**", func(srv upstreamv0.ServerJSON) string { return fmt.Sprintf("%d", extractStars(srv)) }},
+		{"**📦 Pulls**", func(srv upstreamv0.ServerJSON) string { return fmt.Sprintf("%d", extractPulls(srv)) }},
+		{"**🔧 Tools**", func(srv upstreamv0.ServerJSON) string { return fmt.Sprintf("%d", len(extractTools(srv))) }},
+		{"**Transport**", s.extractTransportValue},
+		{"**Tier**", s.extractTierValue},
+		{"**Status**", s.extractStatusValue},
+	}
+
+	// Write each attribute row
+	for _, attr := range attributes {
+		s.writeTableRow(result, servers, attr.label, attr.extractor)
+	}
+
+	result.WriteString("\n")
+}
+
+// writeTableHeader writes the table header and separator
+func (*Server) writeTableHeader(result *strings.Builder, servers []upstreamv0.ServerJSON) {
 	result.WriteString("| Attribute | ")
 	for _, server := range servers {
-		result.WriteString(fmt.Sprintf("%s | ", server.Name))
+		fmt.Fprintf(result, "%s | ", server.Name)
 	}
 	result.WriteString("\n|-----------|")
 	for range servers {
 		result.WriteString("----------|")
 	}
 	result.WriteString("\n")
+}
 
-	// Version
-	result.WriteString("| **Version** | ")
+// writeTableRow writes a single attribute row in the comparison table
+func (*Server) writeTableRow(
+	result *strings.Builder, servers []upstreamv0.ServerJSON, label string,
+	extractor func(upstreamv0.ServerJSON) string,
+) {
+	fmt.Fprintf(result, "| %s | ", label)
 	for _, server := range servers {
-		result.WriteString(fmt.Sprintf("%s | ", server.Version))
+		fmt.Fprintf(result, "%s | ", extractor(server))
 	}
 	result.WriteString("\n")
+}
 
-	// Stars
-	result.WriteString("| **⭐ Stars** | ")
-	for _, server := range servers {
-		result.WriteString(fmt.Sprintf("%d | ", extractStars(server)))
+// extractTransportValue extracts transport from ToolHive metadata
+func (*Server) extractTransportValue(server upstreamv0.ServerJSON) string {
+	thMeta := extractToolHiveMetadata(server)
+	if transport, ok := thMeta["transport"].(string); ok {
+		return transport
 	}
-	result.WriteString("\n")
+	return notAvailable
+}
 
-	// Pulls
-	result.WriteString("| **📦 Pulls** | ")
-	for _, server := range servers {
-		result.WriteString(fmt.Sprintf("%d | ", extractPulls(server)))
+// extractTierValue extracts tier from ToolHive metadata
+func (*Server) extractTierValue(server upstreamv0.ServerJSON) string {
+	thMeta := extractToolHiveMetadata(server)
+	if tier, ok := thMeta["tier"].(string); ok {
+		return tier
 	}
-	result.WriteString("\n")
+	return notAvailable
+}
 
-	// Tools count
-	result.WriteString("| **🔧 Tools** | ")
-	for _, server := range servers {
-		tools := extractTools(server)
-		result.WriteString(fmt.Sprintf("%d | ", len(tools)))
+// extractStatusValue extracts status from ToolHive metadata
+func (*Server) extractStatusValue(server upstreamv0.ServerJSON) string {
+	thMeta := extractToolHiveMetadata(server)
+	if status, ok := thMeta["status"].(string); ok {
+		return status
 	}
-	result.WriteString("\n")
+	return notAvailable
+}
 
-	// Transport
-	result.WriteString("| **Transport** | ")
-	for _, server := range servers {
-		thMeta := extractToolHiveMetadata(server)
-		transport := notAvailable
-		if t, ok := thMeta["transport"].(string); ok {
-			transport = t
-		}
-		result.WriteString(fmt.Sprintf("%s | ", transport))
-	}
-	result.WriteString("\n")
-
-	// Tier
-	result.WriteString("| **Tier** | ")
-	for _, server := range servers {
-		thMeta := extractToolHiveMetadata(server)
-		tier := notAvailable
-		if t, ok := thMeta["tier"].(string); ok {
-			tier = t
-		}
-		result.WriteString(fmt.Sprintf("%s | ", tier))
-	}
-	result.WriteString("\n")
-
-	// Status
-	result.WriteString("| **Status** | ")
-	for _, server := range servers {
-		thMeta := extractToolHiveMetadata(server)
-		status := notAvailable
-		if s, ok := thMeta["status"].(string); ok {
-			status = s
-		}
-		result.WriteString(fmt.Sprintf("%s | ", status))
-	}
-	result.WriteString("\n\n")
-
-	// Detailed descriptions
+// writeDescriptions writes the descriptions section
+func (*Server) writeDescriptions(result *strings.Builder, servers []upstreamv0.ServerJSON) {
 	result.WriteString("## Descriptions\n\n")
 	for _, server := range servers {
-		result.WriteString(fmt.Sprintf("### %s\n", server.Name))
-		result.WriteString(fmt.Sprintf("%s\n\n", server.Description))
+		fmt.Fprintf(result, "### %s\n", server.Name)
+		fmt.Fprintf(result, "%s\n\n", server.Description)
 	}
+}
 
-	// Tool lists
+// writeToolLists writes the available tools section
+func (*Server) writeToolLists(result *strings.Builder, servers []upstreamv0.ServerJSON) {
 	result.WriteString("## Available Tools\n\n")
 	for _, server := range servers {
 		tools := extractTools(server)
-		result.WriteString(fmt.Sprintf("### %s\n", server.Name))
+		fmt.Fprintf(result, "### %s\n", server.Name)
 		if len(tools) > 0 {
 			for _, tool := range tools {
-				result.WriteString(fmt.Sprintf("- %s\n", tool))
+				fmt.Fprintf(result, "- %s\n", tool)
 			}
 		} else {
 			result.WriteString("No tool information available\n")
 		}
 		result.WriteString("\n")
 	}
-
-	return &sdkmcp.CallToolResult{
-		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: result.String()}},
-	}, nil, nil
 }
 
 // HTTP API helper methods
@@ -709,5 +781,6 @@ func (s *Server) getServerFromAPI(ctx context.Context, serverName string) (upstr
 	}
 
 	// Server not found or other error
-	return upstreamv0.ServerJSON{}, fmt.Errorf("server not found: %s (API returned status %d: %s)", serverName, resp.StatusCode, string(body))
+	return upstreamv0.ServerJSON{}, fmt.Errorf("server not found: %s (API returned status %d: %s)",
+		serverName, resp.StatusCode, string(body))
 }

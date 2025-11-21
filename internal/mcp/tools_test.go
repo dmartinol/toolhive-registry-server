@@ -9,9 +9,12 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	upstreamv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
+	"github.com/modelcontextprotocol/registry/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testServersPath = "/v0/servers"
 
 func TestExtractToolHiveMetadata(t *testing.T) {
 	t.Parallel()
@@ -219,7 +222,7 @@ func TestHandleSearchServers_WithTags(t *testing.T) {
 
 	// Create test HTTP server - returns ALL servers (client-side filtering)
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v0/servers" {
+		if r.URL.Path == testServersPath {
 			w.Header().Set("Content-Type", "application/json")
 			// Return official ServerListResponse format with all servers
 			response := upstreamv0.ServerListResponse{
@@ -293,7 +296,8 @@ func TestSearchServers_WithCursorIteration(t *testing.T) {
 			cursor := r.URL.Query().Get("cursor")
 			var response upstreamv0.ServerListResponse
 
-			if cursor == "" {
+			switch cursor {
+			case "":
 				// First page: return servers 1-2 with nextCursor
 				response = upstreamv0.ServerListResponse{
 					Servers: []upstreamv0.ServerResponse{
@@ -306,7 +310,7 @@ func TestSearchServers_WithCursorIteration(t *testing.T) {
 					},
 				}
 				callCount++
-			} else if cursor == "page2cursor" {
+			case "page2cursor":
 				// Second page: return server 3 with no nextCursor
 				response = upstreamv0.ServerListResponse{
 					Servers: []upstreamv0.ServerResponse{
@@ -387,6 +391,186 @@ func TestSearchServers_WithCursorIteration(t *testing.T) {
 
 	// Verify pagination happened (2 API calls)
 	assert.Equal(t, 2, callCount, "Should have made 2 API calls total")
+}
+
+func TestMatchesRegistryTypeFilter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		server       upstreamv0.ServerJSON
+		registryType string
+		expected     bool
+	}{
+		{
+			name: "matches oci registry type",
+			server: upstreamv0.ServerJSON{
+				Packages: []model.Package{
+					{
+						RegistryType: "oci",
+						Identifier:   "ghcr.io/example/server:latest",
+					},
+				},
+			},
+			registryType: "oci",
+			expected:     true,
+		},
+		{
+			name: "matches npm registry type case-insensitive",
+			server: upstreamv0.ServerJSON{
+				Packages: []model.Package{
+					{
+						RegistryType: "npm",
+						Identifier:   "@modelcontextprotocol/server-example",
+					},
+				},
+			},
+			registryType: "NPM",
+			expected:     true,
+		},
+		{
+			name: "does not match different registry type",
+			server: upstreamv0.ServerJSON{
+				Packages: []model.Package{
+					{
+						RegistryType: "npm",
+						Identifier:   "@modelcontextprotocol/server-example",
+					},
+				},
+			},
+			registryType: "oci",
+			expected:     false,
+		},
+		{
+			name: "matches when one of multiple packages has registry type",
+			server: upstreamv0.ServerJSON{
+				Packages: []model.Package{
+					{
+						RegistryType: "npm",
+						Identifier:   "@modelcontextprotocol/server-example",
+					},
+					{
+						RegistryType: "oci",
+						Identifier:   "ghcr.io/example/server:latest",
+					},
+				},
+			},
+			registryType: "oci",
+			expected:     true,
+		},
+		{
+			name: "empty filter matches all",
+			server: upstreamv0.ServerJSON{
+				Packages: []model.Package{
+					{
+						RegistryType: "npm",
+						Identifier:   "@modelcontextprotocol/server-example",
+					},
+				},
+			},
+			registryType: "",
+			expected:     true,
+		},
+		{
+			name: "no packages does not match",
+			server: upstreamv0.ServerJSON{
+				Packages: []model.Package{},
+			},
+			registryType: "oci",
+			expected:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := &Server{}
+			result := s.matchesRegistryTypeFilter(tt.server, tt.registryType)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestSearchServers_WithRegistryTypeFilter(t *testing.T) {
+	t.Parallel()
+
+	// Create test servers with different registry types
+	servers := []upstreamv0.ServerJSON{
+		{
+			Name:        "io.test/oci-server",
+			Description: "An OCI-based server",
+			Version:     "1.0.0",
+			Packages: []model.Package{
+				{
+					RegistryType: "oci",
+					Identifier:   "ghcr.io/test/oci-server:latest",
+				},
+			},
+		},
+		{
+			Name:        "io.test/npm-server",
+			Description: "An NPM-based server",
+			Version:     "1.0.0",
+			Packages: []model.Package{
+				{
+					RegistryType: "npm",
+					Identifier:   "@test/npm-server",
+				},
+			},
+		},
+		{
+			Name:        "io.test/pypi-server",
+			Description: "A PyPI-based server",
+			Version:     "1.0.0",
+			Packages: []model.Package{
+				{
+					RegistryType: "pypi",
+					Identifier:   "test-pypi-server",
+				},
+			},
+		},
+	}
+
+	// Create test HTTP server - returns ALL servers (client-side filtering)
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == testServersPath {
+			w.Header().Set("Content-Type", "application/json")
+			// Return official ServerListResponse format with all servers
+			response := upstreamv0.ServerListResponse{
+				Servers: []upstreamv0.ServerResponse{
+					{Server: servers[0]},
+					{Server: servers[1]},
+					{Server: servers[2]},
+				},
+				Metadata: upstreamv0.Metadata{
+					Count: 3,
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer testServer.Close()
+
+	// Create MCP server with test API URL
+	mcpServer := NewServer(testServer.URL)
+
+	params := &SearchServersParams{
+		RegistryType: "oci",
+		Limit:        10,
+	}
+
+	result, _, err := mcpServer.searchServers(context.Background(), nil, params)
+	require.NoError(t, err)
+
+	assert.False(t, result.IsError)
+	assert.Len(t, result.Content, 1)
+	textContent := result.Content[0].(*sdkmcp.TextContent)
+	assert.Contains(t, textContent.Text, "io.test/oci-server")
+	assert.NotContains(t, textContent.Text, "io.test/npm-server")
+	assert.NotContains(t, textContent.Text, "io.test/pypi-server")
 }
 
 // TestHandleCompareServers_InvalidArgs removed - SDK validates parameters automatically via jsonschema

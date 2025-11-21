@@ -33,6 +33,7 @@ thv-registry-api serve [flags]
 ```
       --address string   Address to listen on (default ":8080")
       --config string    Path to configuration file (YAML format, required)
+      --enable-mcp       Enable MCP (Model Context Protocol) endpoints at /mcp
   -h, --help             help for serve
 ```
 
