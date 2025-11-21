@@ -1,3 +1,4 @@
+// Package main is the entry point for the MCP server CLI application
 package main
 
 import (
@@ -28,4 +29,3 @@ to the ToolHive Registry, enabling AI assistants to discover and query MCP serve
 		os.Exit(1)
 	}
 }
-

@@ -73,11 +73,12 @@ func NewServer(svc service.RegistryService, opts ...ServerOption) *chi.Mux {
 	// Mount MCP endpoints if enabled
 	if cfg.enableMCP {
 		logger.Info("MCP endpoints enabled at /mcp")
-		mcpServer := mcp.NewServer(svc)
+		// Use local cache mode for integrated deployment
+		mcpServer := mcp.NewServerWithCache(svc)
 		sdkServer := mcpServer.GetSDKServer()
 
 		// Create SDK StreamableHTTPHandler
-		mcpHandler := sdkmcp.NewStreamableHTTPHandler(func(req *http.Request) *sdkmcp.Server {
+		mcpHandler := sdkmcp.NewStreamableHTTPHandler(func(_ *http.Request) *sdkmcp.Server {
 			return sdkServer
 		}, nil)
 

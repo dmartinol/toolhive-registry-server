@@ -1,3 +1,4 @@
+// Package app provides the CLI application commands for the MCP server
 package app
 
 import (
@@ -14,11 +15,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stacklok/toolhive/pkg/logger"
 
-	"github.com/stacklok/toolhive-registry-server/internal/config"
 	"github.com/stacklok/toolhive-registry-server/internal/mcp"
-	"github.com/stacklok/toolhive-registry-server/internal/service"
-	"github.com/stacklok/toolhive-registry-server/internal/service/inmemory"
-	"github.com/stacklok/toolhive-registry-server/internal/sources"
 )
 
 const (
@@ -34,8 +31,9 @@ func ServeCmd() *cobra.Command {
 		Long: `Start the MCP (Model Context Protocol) server to provide AI assistants 
 with access to the ToolHive Registry through MCP tools.
 
-The server requires a configuration file (--config) that specifies the registry
-data source (Git, API, or File). See examples/ directory for sample configurations.
+The server connects to an existing Registry API server (--registry-url) and acts
+as a stateless MCP-to-REST bridge. The Registry API server must be running and
+accessible at the specified URL.
 
 Transport modes:
 - http: Standard HTTP JSON-RPC (default)
@@ -44,17 +42,17 @@ Transport modes:
 	}
 
 	// Define flags
+	cmd.Flags().String("registry-url", "", "URL of the Registry API server (required)")
 	cmd.Flags().String("address", ":8081", "Address to listen on (HTTP mode)")
-	cmd.Flags().String("config", "", "Path to configuration file (YAML format, required)")
 	cmd.Flags().String("transport", defaultTransport, "Transport mode: http or stdio")
 
 	// Bind flags to viper
+	_ = viper.BindPFlag("registry.url", cmd.Flags().Lookup("registry-url"))
 	_ = viper.BindPFlag("mcp.address", cmd.Flags().Lookup("address"))
-	_ = viper.BindPFlag("config", cmd.Flags().Lookup("config"))
 	_ = viper.BindPFlag("mcp.transport", cmd.Flags().Lookup("transport"))
 
-	// Mark config as required
-	_ = cmd.MarkFlagRequired("config")
+	// Mark registry-url as required
+	_ = cmd.MarkFlagRequired("registry-url")
 
 	return cmd
 }
@@ -62,26 +60,23 @@ Transport modes:
 func runServe(_ *cobra.Command, _ []string) error {
 	ctx := context.Background()
 
-	// Load and validate configuration
-	configPath := viper.GetString("config")
-	cfg, err := config.LoadConfig(
-		config.WithConfigPath(configPath),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
+	// Get registry URL
+	registryURL := viper.GetString("registry.url")
+	if registryURL == "" {
+		return fmt.Errorf("registry URL is required (use --registry-url)")
 	}
 
-	logger.Infof("Loaded configuration from %s (registry: %s, source: %s)",
-		configPath, cfg.GetRegistryName(), cfg.Source.Type)
+	logger.Infof("Connecting to Registry API at %s", registryURL)
 
-	// Initialize registry service
-	registryService, err := initializeRegistryService(ctx, cfg)
-	if err != nil {
-		return fmt.Errorf("failed to initialize registry service: %w", err)
+	// Verify Registry API is accessible
+	if err := verifyRegistryAPI(ctx, registryURL); err != nil {
+		return fmt.Errorf("failed to connect to Registry API: %w", err)
 	}
 
-	// Create MCP server using SDK
-	mcpServer := mcp.NewServer(registryService)
+	logger.Info("Successfully connected to Registry API")
+
+	// Create MCP server using SDK with Registry API client
+	mcpServer := mcp.NewServer(registryURL)
 	sdkServer := mcpServer.GetSDKServer()
 
 	// Get transport mode
@@ -97,30 +92,27 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 }
 
-func initializeRegistryService(ctx context.Context, cfg *config.Config) (service.RegistryService, error) {
-	// Create data directory if needed
-	dataDir := "./data"
-	if err := os.MkdirAll(dataDir, 0750); err != nil {
-		return nil, fmt.Errorf("failed to create data directory: %w", err)
-	}
+// verifyRegistryAPI checks if the Registry API is accessible
+func verifyRegistryAPI(ctx context.Context, registryURL string) error {
+	client := &http.Client{Timeout: 5 * time.Second}
 
-	// Create storage manager
-	storageManager := sources.NewFileStorageManager(dataDir)
-
-	// Create registry provider using factory
-	factory := service.NewRegistryProviderFactory(storageManager)
-	provider, err := factory.CreateProvider(cfg)
+	// Try to fetch the servers list to verify connectivity
+	req, err := http.NewRequestWithContext(ctx, "GET", registryURL+"/v0/servers?limit=1", nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create registry provider: %w", err)
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Create service
-	svc, err := inmemory.New(ctx, provider)
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create registry service: %w", err)
+		return fmt.Errorf("failed to connect: %w (is the Registry API server running?)", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	return svc, nil
+	return nil
 }
 
 func runStdioMode(ctx context.Context, sdkServer *sdkmcp.Server) error {
@@ -165,7 +157,7 @@ func runHTTPMode(ctx context.Context, sdkServer *sdkmcp.Server) error {
 	logger.Infof("Starting MCP server in HTTP mode on %s", address)
 
 	// Create SDK StreamableHTTPHandler
-	handler := sdkmcp.NewStreamableHTTPHandler(func(req *http.Request) *sdkmcp.Server {
+	handler := sdkmcp.NewStreamableHTTPHandler(func(_ *http.Request) *sdkmcp.Server {
 		return sdkServer
 	}, nil)
 

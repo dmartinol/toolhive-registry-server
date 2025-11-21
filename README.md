@@ -40,13 +40,15 @@ The ToolHive Registry API (`thv-registry-api`) implements the official [Model Co
 - **Official Go SDK**: Built on [modelcontextprotocol/go-sdk](https://github.com/modelcontextprotocol/go-sdk) v1.1.0
 - **Standards Compliant**: Guaranteed MCP specification compliance via SDK
 - **Type-Safe Tools**: Automatic JSON schema generation from Go structs
+- **Official Registry Support**: Connect directly to https://registry.modelcontextprotocol.io
+- **Stateless Architecture**: No local data sync, acts as MCP-to-REST bridge
 - **Natural Language Search**: Query servers using conversational language
 - **Rich Metadata**: Access stars, pulls, tools, and ToolHive-specific data
-- **Multiple Tools**: search, details, list, and compare operations
+- **Three Powerful Tools**: `search_servers`, `get_server_details`, and `compare_servers`
 - **Flexible Transport**: HTTP (StreamableHTTP) and stdio modes
 - **AI Assistant Ready**: Works with Claude Desktop and other MCP clients
 
-See [MCPServer.md](MCPServer.md) for complete MCP server documentation.
+See [MCPServer.md](MCPServer.md) for complete MCP server documentation and [OFFICIAL_REGISTRY_SUPPORT.md](OFFICIAL_REGISTRY_SUPPORT.md) for official registry integration.
 
 ## Quick Start
 
@@ -122,11 +124,14 @@ See the [Database Migrations](#database-migrations) section for more details on 
 #### MCP Server (`thv-registry-mcp`)
 
 ```bash
-# Start the MCP server (HTTP mode)
-thv-registry-mcp serve --config config.yaml [--address :8081]
+# Connect to official MCP Registry (no local setup needed)
+thv-registry-mcp serve --registry-url https://registry.modelcontextprotocol.io
 
-# Start the MCP server (stdio mode for AI assistants)
-thv-registry-mcp serve --config config.yaml --transport stdio
+# Connect to local Registry API
+thv-registry-mcp serve --registry-url http://localhost:8080
+
+# Start in stdio mode (for AI assistants like Claude Desktop, Cursor)
+thv-registry-mcp serve --registry-url https://registry.modelcontextprotocol.io --transport stdio
 
 # Display version information
 thv-registry-mcp version [--json]
@@ -135,7 +140,7 @@ thv-registry-mcp version [--json]
 thv-registry-mcp --help
 ```
 
-For detailed MCP server usage and AI assistant integration, see [MCPServer.md](MCPServer.md).
+For detailed MCP server usage and AI assistant integration, see [MCPServer.md](MCPServer.md) and [OFFICIAL_REGISTRY_SUPPORT.md](OFFICIAL_REGISTRY_SUPPORT.md).
 
 ## API Endpoints
 

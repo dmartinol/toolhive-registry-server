@@ -81,17 +81,17 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// Build application using the builder pattern
 	address := viper.GetString("address")
 	enableMCP := viper.GetBool("enable-mcp")
-	
+
 	appOpts := []registryapp.RegistryAppOptions{
 		registryapp.WithConfig(cfg),
 		registryapp.WithAddress(address),
 	}
-	
+
 	if enableMCP {
 		logger.Info("MCP endpoints will be enabled")
 		appOpts = append(appOpts, registryapp.WithMCP(true))
 	}
-	
+
 	app, err := registryapp.NewRegistryApp(ctx, appOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to build application: %w", err)

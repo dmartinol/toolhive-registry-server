@@ -2,15 +2,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	upstreamv0 "github.com/modelcontextprotocol/registry/pkg/api/v0"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
-
-	"github.com/stacklok/toolhive-registry-server/internal/service/mocks"
 )
 
 func TestExtractToolHiveMetadata(t *testing.T) {
@@ -97,77 +97,8 @@ func TestExtractStars(t *testing.T) {
 	}
 }
 
-func TestHandleListServers(t *testing.T) {
-	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockSvc := mocks.NewMockRegistryService(ctrl)
-	server := NewServer(mockSvc)
-
-	servers := []upstreamv0.ServerJSON{
-		{
-			Name:        "io.test/server1",
-			Description: "Server 1",
-			Version:     "1.0.0",
-			Meta: &upstreamv0.ServerMeta{
-				PublisherProvided: map[string]any{
-					"provider": map[string]any{
-						"toolhive": map[string]any{
-							"metadata": map[string]any{
-								"stars": float64(100),
-								"pulls": float64(500),
-							},
-						},
-					},
-				},
-			},
-		},
-		{
-			Name:        "io.test/server2",
-			Description: "Server 2",
-			Version:     "1.0.0",
-			Meta: &upstreamv0.ServerMeta{
-				PublisherProvided: map[string]any{
-					"provider": map[string]any{
-						"toolhive": map[string]any{
-							"metadata": map[string]any{
-								"stars": float64(200),
-								"pulls": float64(1000),
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	mockSvc.EXPECT().ListServers(context.Background()).Return(servers, nil)
-
-	params := &ListServersParams{
-		Limit:  10,
-		SortBy: "stars",
-	}
-
-	result, _, err := server.listServers(context.Background(), nil, params)
-	require.NoError(t, err)
-
-	assert.False(t, result.IsError)
-	assert.Len(t, result.Content, 1)
-	textContent := result.Content[0].(*sdkmcp.TextContent)
-	assert.Contains(t, textContent.Text, "io.test/server1")
-	assert.Contains(t, textContent.Text, "io.test/server2")
-}
-
 func TestHandleCompareServers(t *testing.T) {
 	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockSvc := mocks.NewMockRegistryService(ctrl)
-	server := NewServer(mockSvc)
 
 	server1 := upstreamv0.ServerJSON{
 		Name:        "io.test/server1",
@@ -211,35 +142,43 @@ func TestHandleCompareServers(t *testing.T) {
 		},
 	}
 
-	mockSvc.EXPECT().GetServer(context.Background(), "io.test/server1").Return(server1, nil)
-	mockSvc.EXPECT().GetServer(context.Background(), "io.test/server2").Return(server2, nil)
+	// Create test HTTP server
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v0/servers/io.test/server1":
+			json.NewEncoder(w).Encode(server1)
+		case "/v0/servers/io.test/server2":
+			json.NewEncoder(w).Encode(server2)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer testServer.Close()
+
+	// Create MCP server with test API URL
+	mcpServer := NewServer(testServer.URL)
 
 	params := &CompareServersParams{
 		ServerNames: []string{"io.test/server1", "io.test/server2"},
 	}
 
-	result, _, err := server.compareServers(context.Background(), nil, params)
+	result, _, err := mcpServer.compareServers(context.Background(), nil, params)
 	require.NoError(t, err)
 
 	assert.False(t, result.IsError)
 	assert.Len(t, result.Content, 1)
-	
+
 	textContent := result.Content[0].(*sdkmcp.TextContent)
 	assert.Contains(t, textContent.Text, "Server Comparison")
 	assert.Contains(t, textContent.Text, "io.test/server1")
 	assert.Contains(t, textContent.Text, "io.test/server2")
-	assert.Contains(t, textContent.Text, "100")  // stars for server1
-	assert.Contains(t, textContent.Text, "200")  // stars for server2
+	assert.Contains(t, textContent.Text, "100") // stars for server1
+	assert.Contains(t, textContent.Text, "200") // stars for server2
 }
 
 func TestHandleSearchServers_WithTags(t *testing.T) {
 	t.Parallel()
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockSvc := mocks.NewMockRegistryService(ctrl)
-	server := NewServer(mockSvc)
 
 	servers := []upstreamv0.ServerJSON{
 		{
@@ -249,10 +188,8 @@ func TestHandleSearchServers_WithTags(t *testing.T) {
 			Meta: &upstreamv0.ServerMeta{
 				PublisherProvided: map[string]any{
 					"provider": map[string]any{
-						"metadata": map[string]any{
+						"package": map[string]any{
 							"tags": []any{"database", "sql"},
-						},
-						"toolhive": map[string]any{
 							"metadata": map[string]any{
 								"stars": float64(100),
 							},
@@ -268,10 +205,8 @@ func TestHandleSearchServers_WithTags(t *testing.T) {
 			Meta: &upstreamv0.ServerMeta{
 				PublisherProvided: map[string]any{
 					"provider": map[string]any{
-						"metadata": map[string]any{
+						"package": map[string]any{
 							"tags": []any{"files", "storage"},
-						},
-						"toolhive": map[string]any{
 							"metadata": map[string]any{
 								"stars": float64(50),
 							},
@@ -282,7 +217,29 @@ func TestHandleSearchServers_WithTags(t *testing.T) {
 		},
 	}
 
-	mockSvc.EXPECT().ListServers(context.Background()).Return(servers, nil)
+	// Create test HTTP server - returns ALL servers (client-side filtering)
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v0/servers" {
+			w.Header().Set("Content-Type", "application/json")
+			// Return official ServerListResponse format with all servers
+			response := upstreamv0.ServerListResponse{
+				Servers: []upstreamv0.ServerResponse{
+					{Server: servers[0]},
+					{Server: servers[1]},
+				},
+				Metadata: upstreamv0.Metadata{
+					Count: 2,
+				},
+			}
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer testServer.Close()
+
+	// Create MCP server with test API URL
+	mcpServer := NewServer(testServer.URL)
 
 	params := &SearchServersParams{
 		Query: "server",
@@ -290,7 +247,7 @@ func TestHandleSearchServers_WithTags(t *testing.T) {
 		Limit: 5,
 	}
 
-	result, _, err := server.searchServers(context.Background(), nil, params)
+	result, _, err := mcpServer.searchServers(context.Background(), nil, params)
 	require.NoError(t, err)
 
 	assert.False(t, result.IsError)
@@ -300,5 +257,136 @@ func TestHandleSearchServers_WithTags(t *testing.T) {
 	assert.NotContains(t, textContent.Text, "io.test/file-server")
 }
 
-// TestHandleCompareServers_InvalidArgs removed - SDK validates parameters automatically via jsonschema
+func TestSearchServers_WithCursorIteration(t *testing.T) {
+	t.Parallel()
 
+	// Create test servers for 2 pages
+	page1Servers := []upstreamv0.ServerJSON{
+		{
+			Name:        "io.test/server1",
+			Description: "Server 1",
+			Version:     "1.0.0",
+		},
+		{
+			Name:        "io.test/server2",
+			Description: "Server 2",
+			Version:     "2.0.0",
+		},
+	}
+
+	page2Servers := []upstreamv0.ServerJSON{
+		{
+			Name:        "io.test/server3",
+			Description: "Server 3",
+			Version:     "3.0.0",
+		},
+	}
+
+	// Track API calls
+	callCount := 0
+
+	// Create test HTTP server that simulates pagination
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v0/servers" {
+			w.Header().Set("Content-Type", "application/json")
+
+			cursor := r.URL.Query().Get("cursor")
+			var response upstreamv0.ServerListResponse
+
+			if cursor == "" {
+				// First page: return servers 1-2 with nextCursor
+				response = upstreamv0.ServerListResponse{
+					Servers: []upstreamv0.ServerResponse{
+						{Server: page1Servers[0]},
+						{Server: page1Servers[1]},
+					},
+					Metadata: upstreamv0.Metadata{
+						Count:      2,
+						NextCursor: "page2cursor",
+					},
+				}
+				callCount++
+			} else if cursor == "page2cursor" {
+				// Second page: return server 3 with no nextCursor
+				response = upstreamv0.ServerListResponse{
+					Servers: []upstreamv0.ServerResponse{
+						{Server: page2Servers[0]},
+					},
+					Metadata: upstreamv0.Metadata{
+						Count:      1,
+						NextCursor: "", // No more pages
+					},
+				}
+				callCount++
+			}
+
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer testServer.Close()
+
+	// Create MCP server with test API URL
+	mcpServer := NewServer(testServer.URL)
+
+	// First call: no cursor, should return page 1 with nextCursor
+	// Set limit to 2 to match first page size, so it stops after first page
+	params1 := &SearchServersParams{
+		Limit: 2,
+	}
+
+	result1, _, err := mcpServer.searchServers(context.Background(), nil, params1)
+	require.NoError(t, err)
+	assert.False(t, result1.IsError)
+
+	// Parse first response
+	textContent1 := result1.Content[0].(*sdkmcp.TextContent)
+	var response1 struct {
+		Servers  []upstreamv0.ServerResponse `json:"servers"`
+		Metadata struct {
+			Count      int    `json:"count"`
+			NextCursor string `json:"nextCursor"`
+		} `json:"metadata"`
+	}
+	err = json.Unmarshal([]byte(textContent1.Text), &response1)
+	require.NoError(t, err)
+
+	// Verify first response
+	assert.Equal(t, 2, len(response1.Servers), "First call should return 2 servers")
+	assert.Equal(t, "page2cursor", response1.Metadata.NextCursor, "Should have nextCursor")
+	assert.Equal(t, "io.test/server1", response1.Servers[0].Server.Name)
+	assert.Equal(t, "io.test/server2", response1.Servers[1].Server.Name)
+
+	// Second call: with cursor, should return page 2 without nextCursor
+	params2 := &SearchServersParams{
+		Cursor: "page2cursor",
+		Limit:  2,
+	}
+
+	result2, _, err := mcpServer.searchServers(context.Background(), nil, params2)
+	require.NoError(t, err)
+	assert.False(t, result2.IsError)
+
+	// Parse second response
+	textContent2 := result2.Content[0].(*sdkmcp.TextContent)
+	var response2 struct {
+		Servers  []upstreamv0.ServerResponse `json:"servers"`
+		Metadata struct {
+			Count      int    `json:"count"`
+			NextCursor string `json:"nextCursor"`
+		} `json:"metadata"`
+	}
+	err = json.Unmarshal([]byte(textContent2.Text), &response2)
+	require.NoError(t, err)
+
+	// Verify second response
+	assert.Equal(t, 1, len(response2.Servers), "Second call should return 1 server")
+	assert.Empty(t, response2.Metadata.NextCursor, "Should have no nextCursor (end of results)")
+	assert.Equal(t, "io.test/server3", response2.Servers[0].Server.Name)
+
+	// Verify pagination happened (2 API calls)
+	assert.Equal(t, 2, callCount, "Should have made 2 API calls total")
+}
+
+// TestHandleCompareServers_InvalidArgs removed - SDK validates parameters automatically via jsonschema

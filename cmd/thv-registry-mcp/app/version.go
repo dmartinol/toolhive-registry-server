@@ -45,4 +45,3 @@ func runVersion(cmd *cobra.Command, _ []string) {
 		fmt.Printf("Platform:   %s\n", info.Platform)
 	}
 }
-

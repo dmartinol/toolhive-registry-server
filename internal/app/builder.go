@@ -323,7 +323,7 @@ func buildHTTPServer(
 	}
 
 	// Create router with middlewares and MCP support
-	router := api.NewServer(svc, 
+	router := api.NewServer(svc,
 		api.WithMiddlewares(b.middlewares...),
 		api.WithMCP(b.enableMCP),
 	)
