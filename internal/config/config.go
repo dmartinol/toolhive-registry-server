@@ -23,6 +23,24 @@ const (
 	SourceTypeFile = "file"
 )
 
+// StorageType is an enum of supported storage backends for registry data.
+type StorageType string
+
+const (
+	// StorageTypeDatabase stores registry data in PostgreSQL database
+	StorageTypeDatabase StorageType = "database"
+
+	// StorageTypeFile stores registry data in local JSON files
+	StorageTypeFile StorageType = "file"
+)
+
+// FileStorageConfig defines file storage settings
+type FileStorageConfig struct {
+	// BaseDir is the base directory for file storage
+	// Defaults to "./data" if not specified
+	BaseDir string `yaml:"baseDir,omitempty"`
+}
+
 const (
 	// SourceFormatToolHive is the native ToolHive registry format
 	SourceFormatToolHive = "toolhive"
@@ -69,11 +87,13 @@ func WithConfigPath(path string) Option {
 type Config struct {
 	// RegistryName is the name/identifier for this registry instance
 	// Defaults to "default" if not specified
-	RegistryName string            `yaml:"registryName,omitempty"`
-	Source       SourceConfig      `yaml:"source"`
-	SyncPolicy   *SyncPolicyConfig `yaml:"syncPolicy,omitempty"`
-	Filter       *FilterConfig     `yaml:"filter,omitempty"`
-	Database     *DatabaseConfig   `yaml:"database,omitempty"`
+	RegistryName string             `yaml:"registryName,omitempty"`
+	Source       SourceConfig       `yaml:"source"`
+	SyncPolicy   *SyncPolicyConfig  `yaml:"syncPolicy,omitempty"`
+	Filter       *FilterConfig      `yaml:"filter,omitempty"`
+	Database     *DatabaseConfig    `yaml:"database,omitempty"`
+	FileStorage  *FileStorageConfig `yaml:"fileStorage,omitempty"`
+	Auth         *AuthConfig        `yaml:"auth,omitempty"`
 }
 
 // SourceConfig defines the data source configuration
@@ -142,6 +162,155 @@ type NameFilterConfig struct {
 type TagFilterConfig struct {
 	Include []string `yaml:"include,omitempty"`
 	Exclude []string `yaml:"exclude,omitempty"`
+}
+
+// AuthMode represents the authentication mode
+type AuthMode string
+
+const (
+	// AuthModeAnonymous allows unauthenticated access
+	AuthModeAnonymous AuthMode = "anonymous"
+
+	// AuthModeOAuth requires OAuth/OIDC authentication
+	AuthModeOAuth AuthMode = "oauth"
+)
+
+// AuthConfig defines authentication configuration for the registry server
+type AuthConfig struct {
+	// Mode specifies the authentication mode (anonymous or oauth)
+	// Defaults to "anonymous" if not specified
+	Mode AuthMode `yaml:"mode,omitempty"`
+
+	// PublicPaths defines additional paths that bypass authentication
+	// These extend the default public paths (health, docs, swagger, well-known)
+	// Example: ["/api/v0/public", "/custom/public"]
+	PublicPaths []string `yaml:"publicPaths,omitempty"`
+
+	// OAuth contains OAuth/OIDC specific configuration
+	// Required when Mode is "oauth"
+	OAuth *OAuthConfig `yaml:"oauth,omitempty"`
+}
+
+// OAuthConfig defines OAuth/OIDC specific authentication settings
+type OAuthConfig struct {
+	// ResourceURL is the URL identifying this protected resource (RFC 9728)
+	// Used in the /.well-known/oauth-protected-resource endpoint
+	ResourceURL string `yaml:"resourceUrl,omitempty"`
+
+	// Providers defines the OAuth/OIDC providers for authentication
+	// Multiple providers can be configured (e.g., Kubernetes + external IDP)
+	Providers []OAuthProviderConfig `yaml:"providers,omitempty"`
+
+	// ScopesSupported defines the OAuth scopes supported by this resource (RFC 9728)
+	// Defaults to ["mcp-registry:read", "mcp-registry:write"] if not specified
+	ScopesSupported []string `yaml:"scopesSupported,omitempty"`
+
+	// Realm is the protection space identifier for WWW-Authenticate header (RFC 7235)
+	// Defaults to "mcp-registry" if not specified
+	Realm string `yaml:"realm,omitempty"`
+}
+
+// OAuthProviderConfig defines configuration for an OAuth/OIDC provider
+type OAuthProviderConfig struct {
+	// Name is a unique identifier for this provider (e.g., "kubernetes", "keycloak")
+	Name string `yaml:"name"`
+
+	// IssuerURL is the OIDC issuer URL (e.g., https://accounts.google.com)
+	// The JWKS URL will be discovered automatically from .well-known/openid-configuration
+	IssuerURL string `yaml:"issuerUrl"`
+
+	// Audience is the expected audience claim in the token (REQUIRED)
+	// Per RFC 6749 Section 4.1.3, tokens must be validated against expected audience
+	// For Kubernetes, this is typically the API server URL
+	Audience string `yaml:"audience"`
+
+	// ClientID is the OAuth client ID for token introspection (optional)
+	ClientID string `yaml:"clientId,omitempty"`
+
+	// ClientSecretFile is the path to a file containing the client secret
+	// The file should contain only the secret with optional trailing whitespace
+	ClientSecretFile string `yaml:"clientSecretFile,omitempty"`
+
+	// CACertPath is the path to a CA certificate bundle for verifying the provider's TLS certificate
+	// Required for Kubernetes in-cluster authentication or self-signed certificates
+	// TODO: Add GetCACert() method with path validation when implementing auth middleware
+	CACertPath string `yaml:"caCertPath,omitempty"`
+}
+
+// GetClientSecret returns the client secret by reading from the file specified in ClientSecretFile.
+// Returns empty string if ClientSecretFile is not configured.
+// Returns an error if the file cannot be read.
+func (p *OAuthProviderConfig) GetClientSecret() (string, error) {
+	secret, err := readSecretFromFile(p.ClientSecretFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read client secret: %w", err)
+	}
+	return secret, nil
+}
+
+// validateProvider validates a single OAuth provider configuration.
+// index is used for error message formatting to identify which provider failed validation.
+func (p *OAuthProviderConfig) validateProvider(index int) error {
+	if p.Name == "" {
+		return fmt.Errorf("auth.oauth.providers[%d].name is required", index)
+	}
+	if p.IssuerURL == "" {
+		return fmt.Errorf("auth.oauth.providers[%d].issuerUrl is required", index)
+	}
+
+	// Validate IssuerURL format
+	issuerURL, err := url.Parse(p.IssuerURL)
+	if err != nil {
+		return fmt.Errorf("auth.oauth.providers[%d].issuerUrl is invalid: %w", index, err)
+	}
+
+	if !issuerURL.IsAbs() || issuerURL.Host == "" {
+		return fmt.Errorf("auth.oauth.providers[%d].issuerUrl must be an absolute URL with host", index)
+	}
+
+	// Enforce HTTPS unless THV_REGISTRY_INSECURE_URL=true or localhost
+	if issuerURL.Scheme != "https" && os.Getenv("THV_REGISTRY_INSECURE_URL") != "true" {
+		host := issuerURL.Hostname()
+		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+			const msg = "must use HTTPS (set THV_REGISTRY_INSECURE_URL=true to allow HTTP)"
+			return fmt.Errorf("auth.oauth.providers[%d].issuerUrl %s", index, msg)
+		}
+	}
+
+	if p.Audience == "" {
+		return fmt.Errorf("auth.oauth.providers[%d].audience is required", index)
+	}
+
+	return nil
+}
+
+// Validate performs validation on the auth configuration
+func (a *AuthConfig) Validate() error {
+	// Validate mode - empty defaults to anonymous
+	switch a.Mode {
+	case AuthModeAnonymous, "":
+		// Anonymous mode doesn't require OAuth config
+		return nil
+	case AuthModeOAuth:
+		// OAuth mode requires OAuth config
+		if a.OAuth == nil {
+			return fmt.Errorf("auth.oauth is required when mode is oauth")
+		}
+		if len(a.OAuth.Providers) == 0 {
+			return fmt.Errorf("auth.oauth.providers is required when mode is oauth")
+		}
+
+		// Validate each provider
+		for i, provider := range a.OAuth.Providers {
+			if err := provider.validateProvider(i); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	default:
+		return fmt.Errorf("invalid auth.mode: %s (must be 'anonymous' or 'oauth')", a.Mode)
+	}
 }
 
 // DatabaseConfig defines database connection settings
@@ -279,13 +448,40 @@ func (c *Config) GetRegistryName() string {
 	return c.RegistryName
 }
 
+// GetStorageType determines the storage type based on configuration
+// Returns StorageTypeDatabase if database is configured
+// Returns StorageTypeFile if file storage is configured or neither is configured (default)
+func (c *Config) GetStorageType() StorageType {
+	if c.Database != nil {
+		return StorageTypeDatabase
+	}
+	return StorageTypeFile
+}
+
+// GetFileStorageBaseDir returns the base directory for file storage
+// Returns "./data" as the default if not specified
+func (c *Config) GetFileStorageBaseDir() string {
+	if c.FileStorage != nil && c.FileStorage.BaseDir != "" {
+		return c.FileStorage.BaseDir
+	}
+	return "./data"
+}
+
 // Validate performs validation on the configuration
 func (c *Config) validate() error {
 	if c == nil {
 		return fmt.Errorf("config cannot be nil")
 	}
 
-	// Validate source configuration
+	if err := c.validateSource(); err != nil {
+		return err
+	}
+
+	return c.validateAuth()
+}
+
+// validateSource validates the source configuration
+func (c *Config) validateSource() error {
 	if c.Source.Type == "" {
 		return fmt.Errorf("source.type is required")
 	}
@@ -304,7 +500,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf("syncPolicy.interval must be a valid duration (e.g., '30m', '1h'): %w", err)
 	}
 
-	return nil
+	// Validate storage configuration
+	return c.validateStorageConfig()
 }
 
 // validateSourceConfigByType validates the source configuration by the source type
@@ -343,4 +540,70 @@ func (c *Config) validateSourceConfigByType() error {
 	}
 
 	return nil
+}
+
+// validateStorageConfig validates the storage configuration
+func (c *Config) validateStorageConfig() error {
+	// TODO: Reinstate this validation once database is fully wired in
+	// Error if both database and file storage are configured
+	// if c.Database != nil && c.FileStorage != nil {
+	// 	return fmt.Errorf("cannot configure both database and fileStorage - only one storage backend is allowed")
+	// }
+
+	// If database is configured, validate required fields
+	if c.Database != nil {
+		if c.Database.Host == "" {
+			return fmt.Errorf("database.host is required when database is configured")
+		}
+		if c.Database.Port == 0 {
+			return fmt.Errorf("database.port is required when database is configured")
+		}
+		if c.Database.User == "" {
+			return fmt.Errorf("database.user is required when database is configured")
+		}
+		if c.Database.Database == "" {
+			return fmt.Errorf("database.database is required when database is configured")
+		}
+	}
+
+	// File storage validation is minimal - baseDir is optional with default
+
+	return nil
+}
+
+// validateAuth validates the auth configuration if present
+func (c *Config) validateAuth() error {
+	if c.Auth != nil {
+		if err := c.Auth.Validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// readSecretFromFile reads a secret from a file with proper path validation.
+// It resolves symlinks, requires absolute paths, and trims whitespace from content.
+func readSecretFromFile(filePath string) (string, error) {
+	if filePath == "" {
+		return "", nil
+	}
+
+	// Resolve symlinks to get real path
+	realPath, err := filepath.EvalSymlinks(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	// Require absolute paths for security
+	if !filepath.IsAbs(realPath) {
+		return "", fmt.Errorf("path must be absolute: %s", filePath)
+	}
+
+	data, err := os.ReadFile(realPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	return strings.TrimSpace(string(data)), nil
 }
